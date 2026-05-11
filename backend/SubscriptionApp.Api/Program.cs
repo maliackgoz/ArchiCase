@@ -1,5 +1,7 @@
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Microsoft.EntityFrameworkCore;
+using SubscriptionApp.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,9 +13,8 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // ── Database ─────────────────────────────────────────────────────────────────
-// TODO (domain-modeler): register AppDbContext here, e.g.:
-//   builder.Services.AddDbContext<AppDbContext>(opt =>
-//       opt.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddDbContext<AppDbContext>(opt =>
+    opt.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ── Validation ───────────────────────────────────────────────────────────────
 // TODO (customer-feature-builder): register FluentValidation here, e.g.:
@@ -35,12 +36,11 @@ builder.Services.AddSwaggerGen();
 var app = builder.Build();
 
 // ── Seed data (development only) ─────────────────────────────────────────────
-// TODO (domain-modeler): call DbInitializer here, e.g.:
-//   if (app.Environment.IsDevelopment())
-//   {
-//       using var scope = app.Services.CreateScope();
-//       await DbInitializer.SeedAsync(scope.ServiceProvider);
-//   }
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    await DbInitializer.SeedAsync(scope.ServiceProvider);
+}
 
 if (app.Environment.IsDevelopment())
 {
