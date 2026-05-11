@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SubscriptionApp.Api.Middleware;
 using SubscriptionApp.Api.Validators.Customers;
+using SubscriptionApp.Api.Validators.Subscriptions;
 using SubscriptionApp.Infrastructure.Persistence;
 using SubscriptionApp.Infrastructure.Services;
 
@@ -49,7 +50,7 @@ builder.Services.AddValidatorsFromAssemblyContaining<CreateCustomerRequestValida
 
 // ── Application services ─────────────────────────────────────────────────────
 builder.Services.AddScoped<ICustomerService, CustomerService>();
-// TODO (subscription-feature-builder): register ISubscriptionService → SubscriptionService (Scoped)
+builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 // TODO (external-services-builder): register typed HttpClients (IDebtInquiryClient, IPaymentGatewayClient, INotificationClient)
 // TODO (payment-feature-builder): register IPaymentService → PaymentService (Scoped)
 

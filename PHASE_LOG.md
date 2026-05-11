@@ -255,6 +255,85 @@ dotnet run --project SubscriptionApp.Api
 
 ---
 
+## Phase 4 — subscription-feature-builder — 2026-05-11
+
+### What was built
+
+Mirrors the customer vertical slice exactly for Subscriptions.
+
+**Api project:**
+- `Dtos/Subscriptions/CreateSubscriptionRequest.cs` — `CustomerId`, `SubscriptionType`, `ProviderName`, `SubscriptionNumber`, `BillingDayOfMonth`
+- `Dtos/Subscriptions/UpdateSubscriptionRequest.cs` — `Status`, `ProviderName`, `BillingDayOfMonth` (no `CustomerId`)
+- `Dtos/Subscriptions/SubscriptionResponse.cs` — all entity fields + `CustomerFullName` (from nav property)
+- `Validators/Subscriptions/CreateSubscriptionRequestValidator.cs` — `IsInEnum()` for `SubscriptionType`, `InclusiveBetween(1, 28)` for `BillingDayOfMonth`, `NotEmpty` + `MaximumLength` for strings
+- `Validators/Subscriptions/UpdateSubscriptionRequestValidator.cs` — same BillingDayOfMonth rule, `IsInEnum()` for Status
+- `Mapping/SubscriptionMappings.cs` — `ToEntity(this CreateSubscriptionRequest)`, `ToResponse(this Subscription)` (CustomerFullName via `?.FullName ?? ""`)
+- `Controllers/SubscriptionsController.cs` — `GET /api/subscriptions?customerId=`, `GET /api/subscriptions/{id}`, `POST /api/subscriptions` (201), `PUT /api/subscriptions/{id}` (200), `DELETE /api/subscriptions/{id}` (204)
+- `Program.cs` — added `using` for `Validators.Subscriptions`, registered `ISubscriptionService → SubscriptionService` (Scoped), removed TODO comment
+
+**Infrastructure project:**
+- `Services/ISubscriptionService.cs` — `GetAllAsync(int? customerId)`, `GetByIdAsync`, `CreateAsync`, `UpdateAsync`, `DeleteAsync`
+- `Services/SubscriptionService.cs` — customer existence check on create (→ 404); compound uniqueness pre-check on create and on update when `ProviderName` changes (→ 409 `DUPLICATE_SUBSCRIPTION`); `Status` forced to `Active` on create; `CreatedAt` = `DateTime.UtcNow`; `GetByIdAsync` re-invoked after update to return the fully-joined entity
+
+**Build result:** `0 errors, 0 warnings`
+
+### Key decisions
+- Decision: `UpdateAsync` signature is `(int id, SubscriptionStatus status, string providerName, int billingDayOfMonth)` — individual parameters rather than passing the request DTO into the service. Reason: the service lives in `Infrastructure`, which must not reference `Api` types. Passing the DTO would create a downward dependency from Infrastructure → Api. Alternative: define a shared update model in Domain or Infrastructure — rejected as premature abstraction for three scalar fields.
+- Decision: `CreateAsync` re-fetches the entity via `GetByIdAsync` after insert to return the Customer nav property populated. Reason: after `SaveChangesAsync()` the newly inserted `Subscription` only has `CustomerId` set; the `Customer` nav property is `null`. The controller would produce `CustomerFullName: ""` without a re-fetch. Alternative: attach the Customer manually after save — rejected as more fragile than a clean re-fetch.
+- Decision: `UpdateAsync` also re-fetches via `GetByIdAsync` after update. Same reason as above.
+- Decision: Duplicate subscription pre-check on both create and update. Reason: the DB filtered unique index is the safety net, but a pre-check gives a user-readable `DUPLICATE_SUBSCRIPTION` error rather than a SQL Server `SqlException`. On update, the check is only performed when `ProviderName` changes (since `SubscriptionNumber` is immutable), avoiding a spurious query on every PUT.
+- Decision: `AddValidatorsFromAssemblyContaining<CreateCustomerRequestValidator>()` already registered in Phase 3 picks up all validators in the `SubscriptionApp.Api` assembly, including the two new Subscription validators. No additional call needed. Reason: `AddValidatorsFromAssemblyContaining<T>` scans the entire assembly, not just one namespace.
+
+### Files created/modified
+- `backend/SubscriptionApp.Api/Dtos/Subscriptions/CreateSubscriptionRequest.cs`
+- `backend/SubscriptionApp.Api/Dtos/Subscriptions/UpdateSubscriptionRequest.cs`
+- `backend/SubscriptionApp.Api/Dtos/Subscriptions/SubscriptionResponse.cs`
+- `backend/SubscriptionApp.Api/Validators/Subscriptions/CreateSubscriptionRequestValidator.cs`
+- `backend/SubscriptionApp.Api/Validators/Subscriptions/UpdateSubscriptionRequestValidator.cs`
+- `backend/SubscriptionApp.Api/Mapping/SubscriptionMappings.cs`
+- `backend/SubscriptionApp.Api/Controllers/SubscriptionsController.cs`
+- `backend/SubscriptionApp.Api/Program.cs` (ISubscriptionService DI, using added)
+- `backend/SubscriptionApp.Infrastructure/Services/ISubscriptionService.cs`
+- `backend/SubscriptionApp.Infrastructure/Services/SubscriptionService.cs`
+
+### Verification commands the student should run
+```bash
+export PATH="$PATH:/usr/local/share/dotnet"
+cd backend
+
+dotnet build SubscriptionApp.slnx
+# Expected: Build succeeded. 0 Warning(s) 0 Error(s)
+
+dotnet run --project SubscriptionApp.Api
+# Navigate to http://localhost:5072/swagger
+
+# Smoke tests in Swagger:
+# GET  /api/subscriptions                    → 200 with 5 seeded subscriptions + CustomerFullName
+# GET  /api/subscriptions?customerId=1       → 200 with 2 subscriptions (Ahmet Yılmaz)
+# GET  /api/subscriptions?customerId=99      → 200 with empty array
+# GET  /api/subscriptions/1                  → 200 with BEDAŞ subscription
+# GET  /api/subscriptions/9999               → 404
+# POST /api/subscriptions { customerId:1, subscriptionType:0, providerName:"TEST", subscriptionNumber:"T-001", billingDayOfMonth:10 }
+#                                            → 201 with Location header
+# POST same body again                       → 409 DUPLICATE_SUBSCRIPTION
+# POST with billingDayOfMonth:29             → 400 VALIDATION_ERROR
+# POST with non-existent customerId:999      → 404
+# PUT  /api/subscriptions/{id} { status:1, providerName:"NEW", billingDayOfMonth:15 }
+#                                            → 200 with updated fields
+# DELETE /api/subscriptions/{id}             → 204 (cascades to Payments)
+```
+
+### Notes for the next agent (`external-services-builder`)
+- The `SubscriptionService.GetAllAsync` accepts a nullable `int?` and applies a WHERE filter only when provided. This pattern can be reused for payment filtering by `subscriptionId`.
+- Cascade delete to Payments is already configured in `PaymentConfiguration.cs` (Phase 2). No additional code needed.
+- `ExternalServices:BaseUrl` in `appsettings.json` must be `http://localhost:5072` (see Phase 2 errata — app listens on port 5072, not 5000).
+- The three mock external controllers go in `Api/Controllers/External/` as a sub-namespace. The three typed `HttpClient` interfaces + implementations go in `Infrastructure/ExternalServices/`. Register each with `AddHttpClient<TInterface, TImpl>()` in `Program.cs` pointing to the `ExternalServices:BaseUrl` config key.
+
+### Open questions raised
+- None.
+
+---
+
 <!--
 Template for future entries — copy and fill in.
 
