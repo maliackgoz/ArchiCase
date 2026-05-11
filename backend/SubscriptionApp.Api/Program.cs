@@ -68,7 +68,7 @@ builder.Services.AddHttpClient<INotificationClient, NotificationClient>(c =>
 {
     c.BaseAddress = new Uri(externalBase);
 });
-// TODO (payment-feature-builder): register IPaymentService → PaymentService (Scoped)
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 
 // ─────────────────────────────────────────────────────────────────────────────
 var app = builder.Build();

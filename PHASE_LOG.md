@@ -432,6 +432,137 @@ dotnet run --project SubscriptionApp.Api
 
 ---
 
+## Phase 6 — payment-feature-builder — 2026-05-11
+
+### What was built
+
+**Domain project:**
+- `Exceptions/ExternalServiceException.cs` — NOT a `DomainException` subclass (502, not 409). Carries `Code` (the gateway error code string). Maps to HTTP 502 in middleware.
+
+**Api project:**
+- `Dtos/Payments/CreatePaymentRequest.cs` — `SubscriptionId` (int), `Amount` (decimal), `Period` (string)
+- `Dtos/Payments/PaymentResponse.cs` — `Id`, `SubscriptionId`, `Amount`, `Period`, `Status`, `PaymentDate`, `ExternalTransactionId?`
+- `Validators/Payments/CreatePaymentRequestValidator.cs` — `SubscriptionId > 0`; `Amount > 0m` (decimal literal — no double); Period regex `^\d{4}-(0[1-9]|1[0-2])$`
+- `Mapping/PaymentMappings.cs` — `ToResponse(this Payment)`
+- `Controllers/PaymentsController.cs` — `GET /api/payments?subscriptionId=`, `GET /api/payments/{id}`, `POST /api/payments`
+- `Middleware/ExceptionHandlingMiddleware.cs` — added `ExternalServiceException` catch → 502 (inserted between DomainException and generic Exception)
+- `Program.cs` — `AddScoped<IPaymentService, PaymentService>()`
+
+**Infrastructure project:**
+- `Services/IPaymentService.cs` — `GetAllAsync(int?)`, `GetByIdAsync(int)`, `CreateAsync(int, decimal, string)`
+- `Services/PaymentService.cs` — full transactional `CreateAsync` (see flow below)
+
+**Build result:** `0 errors, 0 warnings`
+
+### CreateAsync full flow
+
+```
+BEGIN TRANSACTION
+  1. Load Subscription (.Include Customer). → NotFoundException(404) if missing.
+  2. subscription.Status == Passive → InactiveSubscriptionException(409).
+  3. AnyAsync Successful payment with same (SubscriptionId, Period)
+        → DuplicatePaymentException(409).  [App-level pre-check for friendly error]
+        [DB filtered unique index WHERE Status=0 is the safety net for concurrent races]
+  4. IPaymentGatewayClient.ProcessPaymentAsync(subscriptionId, amount)
+  5. Build Payment entity:
+        Status = Success ? Successful : Failed
+        ExternalTransactionId = Success ? transactionId : null
+        Amount = decimal (never double)
+        PaymentDate = DateTime.UtcNow (never DateTime.Now)
+  6. Payments.Add → SaveChangesAsync → CommitAsync  (committed = true)
+
+  If Success:
+     Fire-and-forget Task.Run → INotificationClient.SendAsync(SMS, phone, msg)
+     [swallow exception — notification failure must NOT affect payment outcome]
+     Return payment entity → 201
+
+  If Failure:
+     Throw ExternalServiceException(errorCode) → 502
+     [Failed record is already committed — kept for audit trail]
+
+CATCH (if !committed):
+     RollbackAsync()   [domain rule violations from steps 1–3 and unexpected errors]
+     Throw
+```
+
+### Key decisions
+- Decision: `ExternalServiceException` is NOT a subclass of `DomainException`. Reason: 502 (upstream failure) is semantically different from 409 (business rule). `DomainException` maps to 409; sharing the base class would require middleware type inspection. Alternative: use `DomainException` with a special code — rejected because it would return 409 for a gateway error, which misrepresents the HTTP semantics to API consumers.
+- Decision: Failed payments are committed before throwing `ExternalServiceException`. Reason: every payment attempt (successful or declined) must be recorded for audit. The `committed` flag prevents the catch block from rolling back an already-committed transaction. Alternative: rollback on failure — rejected because the audit trail would be lost.
+- Decision: Fire-and-forget notification is launched with `Task.Run` after commit, capturing `_notificationClient` by closure. Exception is swallowed in the inner try/catch. Reason: a notification failure must never affect the already-committed payment. The scope outlives the fire-and-forget task because `IHttpClientFactory` manages the HttpClient lifetime independently of the DI scope. `AppDbContext` is NOT captured in the lambda. Alternative: background `IHostedService` queue — rejected as premature abstraction for a case study.
+- Decision: `PaymentService.CreateAsync` takes scalar parameters `(int subscriptionId, decimal amount, string period)` rather than a `Payment` entity. Reason: Amount and Period are validated in the controller/validator before reaching the service; the service constructs the entity itself to enforce invariants (UTC timestamp, correct Status). Alternative: accept a partial entity — rejected because it creates ambiguity about which fields are caller-set vs service-set.
+- Decision: `IPaymentService.GetAllAsync` returns payments ordered by `PaymentDate DESC`. Reason: most recent payments are most useful for inspection in Swagger and the dashboard endpoint in Phase 7.
+
+### Error scenarios and HTTP codes
+
+| Scenario | HTTP | Code |
+|---|---|---|
+| Amount ≤ 0 or invalid Period | 400 | `VALIDATION_ERROR` |
+| Subscription not found | 404 | `NOT_FOUND` |
+| Subscription is Passive | 409 | `INACTIVE_SUBSCRIPTION` |
+| Successful payment already exists for period | 409 | `DUPLICATE_PAYMENT` |
+| Gateway declines | 502 | `INSUFFICIENT_FUNDS` / `GATEWAY_TIMEOUT` / `DECLINED` |
+| Happy path | 201 | — |
+
+### Files created/modified
+- `backend/SubscriptionApp.Domain/Exceptions/ExternalServiceException.cs`
+- `backend/SubscriptionApp.Api/Dtos/Payments/CreatePaymentRequest.cs`
+- `backend/SubscriptionApp.Api/Dtos/Payments/PaymentResponse.cs`
+- `backend/SubscriptionApp.Api/Validators/Payments/CreatePaymentRequestValidator.cs`
+- `backend/SubscriptionApp.Api/Mapping/PaymentMappings.cs`
+- `backend/SubscriptionApp.Api/Controllers/PaymentsController.cs`
+- `backend/SubscriptionApp.Api/Middleware/ExceptionHandlingMiddleware.cs` (ExternalServiceException → 502)
+- `backend/SubscriptionApp.Api/Program.cs` (IPaymentService DI)
+- `backend/SubscriptionApp.Infrastructure/Services/IPaymentService.cs`
+- `backend/SubscriptionApp.Infrastructure/Services/PaymentService.cs`
+
+### Verification commands the student should run
+```bash
+export PATH="$PATH:/usr/local/share/dotnet"
+cd backend
+dotnet build SubscriptionApp.slnx
+# Expected: Build succeeded. 0 Warning(s) 0 Error(s)
+
+dotnet run --project SubscriptionApp.Api
+# Navigate to http://localhost:5072/swagger
+
+# Happy path (run multiple times — ~10% chance of 502 on gateway failure):
+# POST /api/payments { subscriptionId:1, amount:150.00, period:"2026-05" }
+#   → 201 { id, subscriptionId:1, amount:150.00, period:"2026-05", status:0 (Successful), transactionId:"TXN-..." }
+#   → Console: ILogger notification line
+
+# Duplicate payment (same subscriptionId + period again):
+# POST /api/payments { subscriptionId:1, amount:150.00, period:"2026-05" }
+#   → 409 { error: { code:"DUPLICATE_PAYMENT", message:"..." } }
+
+# Passive subscription: first set subscription 1 to Passive via PUT /api/subscriptions/1
+# POST /api/payments { subscriptionId:1, amount:100.00, period:"2026-06" }
+#   → 409 { error: { code:"INACTIVE_SUBSCRIPTION", message:"..." } }
+
+# Invalid period:
+# POST /api/payments { subscriptionId:1, amount:100.00, period:"2026-13" }
+#   → 400 { error: { code:"VALIDATION_ERROR", ... } }
+
+# GET /api/payments?subscriptionId=1  → 200 list ordered by PaymentDate DESC
+# GET /api/payments/{id}              → 200 / 404
+```
+
+### Notes for the next agent (`test-and-dashboard-builder`)
+- Four rules that MUST have xUnit test coverage:
+  1. `DuplicatePaymentException` when a Successful payment already exists for (subscriptionId, period)
+  2. `InactiveSubscriptionException` when subscription.Status == Passive
+  3. Amount validation — zero and negative values must return 400 (theory test with multiple inputs)
+  4. Dashboard correctness — `GET /api/customers/{id}/dashboard` returns correct ActiveSubscriptionCount, UnpaidThisMonth, TotalPaidThisYear, RecentPayments (last 10)
+- Use EF Core InMemory for tests. Helper: `CreateInMemoryContext()` with a unique DB name per test (`Guid.NewGuid().ToString()`).
+- Mock `IPaymentGatewayClient` for deterministic success (return `new PaymentGatewayResponse { Success = true, TransactionId = "TXN-TEST" }`).
+- Also mock `INotificationClient` — fire-and-forget means it won't block tests but the mock prevents real HTTP calls.
+- The dashboard endpoint `GET /api/customers/{id}/dashboard` still needs to be built (it's in Phase 7 scope). Implement it directly in `CustomerService` or a new `DashboardService` — keep it in the same pattern as other services.
+- UnpaidThisMonth definition: subscriptions that are Active and have NO Successful payment for the current month's period (`DateTime.UtcNow.ToString("yyyy-MM")`).
+
+### Open questions raised
+- None.
+
+---
+
 <!--
 Template for future entries — copy and fill in.
 

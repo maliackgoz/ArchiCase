@@ -28,6 +28,10 @@ public class ExceptionHandlingMiddleware
         {
             await WriteErrorAsync(context, StatusCodes.Status409Conflict, ex.Code, ex.Message);
         }
+        catch (ExternalServiceException ex)
+        {
+            await WriteErrorAsync(context, StatusCodes.Status502BadGateway, ex.Code, ex.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unhandled exception");
