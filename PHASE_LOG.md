@@ -756,3 +756,58 @@ Template for future entries — copy and fill in.
 
 ---
 -->
+
+## Phase 9 — Documentation Finalizer
+
+**Agent:** documentation-finalizer
+**Date:** 2026-05-11
+
+### What was built
+
+Four documentation files in `/docs/` and a complete rewrite of `README.md`.
+
+| File | Contents |
+|---|---|
+| `docs/ER-diagram.md` | Mermaid `erDiagram` for Customer, Subscription, Payment; cardinality notes; compound unique index design note; `PaymentStatus.Successful = 0` load-bearing coupling warning |
+| `docs/api-endpoints.md` | All 16 endpoints grouped by resource (Customers, Subscriptions, Payments, External Services); request/response schemas; every status code with condition |
+| `docs/flow-diagrams.md` | Four Mermaid `sequenceDiagram`s: happy path (debt inquiry → payment → notification), duplicate rejection, passive subscription rejection, gateway failure (COMMIT before throw) |
+| `docs/architecture.md` | 3-layer vs full Clean Architecture rationale; zero-dep Domain reasoning; hand-written mapping vs AutoMapper; FluentValidation vs DataAnnotations; transaction design with `committed` flag; decimal/UTC rationale |
+| `README.md` | Rewritten from bootstrap placeholder: tech stack table, prerequisites, setup (Docker → migrations → backend → frontend), test commands, project tree, docs links table, **AI Usage Disclosure** (workflow architecture, what AI built, human decisions, corrections made, retrospective) |
+
+### Key decisions
+
+| Decision | Reason | Alternative considered |
+|---|---|---|
+| Documented `PaymentStatus.Successful = 0` as load-bearing in the ER diagram | The filtered index `WHERE [Status] = 0` is an implicit coupling between a C# enum value and a DB literal; must be visible to anyone reading the data model | Leaving it only in code comments — too easy to miss |
+| Documented `committed` flag pattern in flow diagram 4 | This is the subtlest part of the payment flow — committing before throwing is counter-intuitive and must be explicit | Omitting from diagrams — would require the reviewer to read source code to understand |
+| README AI Usage section is structured as personal retrospective | The spec required transparency; breaking it into "what AI did / what human decided / what human corrected / what I'd do differently" mirrors the format of a post-mortem and is easy for an interviewer to skim | A flat "this was AI-assisted" disclaimer — insufficient |
+| Included exact fix descriptions in "Things I changed or corrected" | Demonstrates debugging process, not just final output | Vague summaries — misses the opportunity to show problem-solving skill |
+
+### Files created / modified
+
+**Created:**
+- `docs/ER-diagram.md`
+- `docs/api-endpoints.md`
+- `docs/flow-diagrams.md`
+- `docs/architecture.md`
+
+**Modified:**
+- `README.md` (full rewrite)
+
+### Verification results
+
+```
+dotnet build SubscriptionApp.slnx
+→ Build succeeded. 0 Warning(s), 0 Error(s)
+
+dotnet test SubscriptionApp.slnx
+→ Passed! Failed: 0, Passed: 6, Skipped: 0, Total: 6
+
+npm run build (frontend)
+→ ✓ built in 111ms — 0 errors, 0 warnings
+```
+
+All Mermaid diagrams use valid syntax (erDiagram, sequenceDiagram). All internal README links point to files that exist in the repository.
+
+### Open questions raised
+None. The project is complete.
