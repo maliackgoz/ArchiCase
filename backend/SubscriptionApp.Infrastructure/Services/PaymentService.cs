@@ -45,6 +45,11 @@ public class PaymentService : IPaymentService
 
     public async Task<Payment> CreateAsync(int subscriptionId, decimal amount, string period)
     {
+        // Defence-in-depth: validate amount at the service layer even though the validator
+        // already rejects <= 0 at the API boundary. Services must not trust callers.
+        if (amount <= 0m)
+            throw new DomainException("INVALID_AMOUNT", "Payment amount must be greater than zero.");
+
         // A transaction ensures the payment record write is atomic with the pre-checks.
         // This protects against partial state if the process crashes between the gateway
         // call and the DB write, and keeps a clean audit trail for every attempt.

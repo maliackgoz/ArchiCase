@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using SubscriptionApp.Api.Dtos.Customers;
 using SubscriptionApp.Api.Mapping;
+using SubscriptionApp.Domain.Enums;
 using SubscriptionApp.Infrastructure.Services;
 
 namespace SubscriptionApp.Api.Controllers;
@@ -43,5 +44,28 @@ public class CustomersController : ControllerBase
     {
         await _customerService.DeleteAsync(id);
         return NoContent();
+    }
+
+    [HttpGet("{id:int}/dashboard")]
+    public async Task<ActionResult<CustomerDashboardResponse>> GetDashboard(int id)
+    {
+        var data = await _customerService.GetDashboardAsync(id);
+
+        var response = new CustomerDashboardResponse
+        {
+            ActiveSubscriptionCount = data.ActiveSubscriptionCount,
+            UnpaidThisMonth = data.UnpaidThisMonth
+                .Select(s => new UnpaidSubscriptionSummary
+                {
+                    Id = s.Id,
+                    ProviderName = s.ProviderName,
+                    SubscriptionType = s.SubscriptionType
+                })
+                .ToList(),
+            RecentPayments = data.RecentPayments.Select(p => p.ToResponse()).ToList(),
+            TotalPaidThisYear = data.TotalPaidThisYear
+        };
+
+        return Ok(response);
     }
 }

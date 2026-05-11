@@ -563,6 +563,81 @@ dotnet run --project SubscriptionApp.Api
 
 ---
 
+## Phase 7 — test-and-dashboard-builder — 2026-05-11
+
+### What was built
+
+**Part A — Dashboard**
+
+- `Api/Dtos/Customers/CustomerDashboardResponse.cs` — `ActiveSubscriptionCount`, `UnpaidThisMonth` (list of `UnpaidSubscriptionSummary`), `RecentPayments` (list of `PaymentResponse`), `TotalPaidThisYear` (decimal)
+- `UnpaidSubscriptionSummary` nested in same file — `Id`, `ProviderName`, `SubscriptionType`
+- `Infrastructure/Services/ICustomerService.cs` — added `GetDashboardAsync(int customerId)` returning `CustomerDashboardData` (a plain data-carrying class defined in the same file)
+- `Infrastructure/Services/CustomerService.cs` — implements `GetDashboardAsync`: loads all subscriptions for the customer, queries `paidThisMonthIds` (Successful payments for `currentPeriod`), computes unpaid list, fetches last 10 payments ordered by `PaymentDate DESC`, sums `TotalPaidThisYear` using UTC year boundaries (`yearStart` / `yearEnd`) rather than `.Year` property for reliable SQL translation
+- `Api/Controllers/CustomersController.cs` — added `GET /api/customers/{id}/dashboard` action mapping `CustomerDashboardData` to `CustomerDashboardResponse`
+
+**Part B — Service-layer guard added to PaymentService**
+
+- `Infrastructure/Services/PaymentService.cs` — added `if (amount <= 0m) throw DomainException("INVALID_AMOUNT", ...)` before the transaction opens. Defence-in-depth: validator catches at boundary, service catches in case of direct programmatic calls.
+
+**Part C — Tests** (`SubscriptionApp.Tests/UnitTest1.cs`)
+
+All 6 test cases pass (`dotnet test` — 0 failures):
+
+| Test | What it verifies |
+|---|---|
+| `PaymentService_RejectsDuplicateSuccessfulPaymentForSamePeriod` | Second payment for same (subscriptionId, period) throws `DuplicatePaymentException` |
+| `PaymentService_RejectsPaymentOnPassiveSubscription` | Payment on Passive subscription throws `InactiveSubscriptionException` |
+| `PaymentService_RejectsZeroOrNegativeAmount(0)` | Amount = 0 throws `DomainException("INVALID_AMOUNT")` |
+| `PaymentService_RejectsZeroOrNegativeAmount(-1)` | Amount = -1 throws `DomainException("INVALID_AMOUNT")` |
+| `PaymentService_RejectsZeroOrNegativeAmount(-999.99)` | Amount = -999.99 throws `DomainException("INVALID_AMOUNT")` |
+| `CustomerDashboard_CorrectlyIdentifiesUnpaidThisMonthSubscriptions` | 3 active subs: 1 paid this month → not in Unpaid; 1 paid last month → in Unpaid; 1 never paid → in Unpaid. TotalPaidThisYear = 230m |
+
+**Build result:** `0 errors, 0 warnings`. `dotnet test`: **6 passed, 0 failed**.
+
+### Key decisions
+- Decision: `CustomerDashboardData` is defined in `ICustomerService.cs` (Infrastructure layer), not in the Api layer. Reason: the service method must return something the controller can map to the Api DTO. A domain-neutral data carrier in Infrastructure avoids a circular reference while keeping the service interface cohesive. Alternative: return a tuple or multiple out-parameters — rejected as unreadable for a multi-field aggregate.
+- Decision: `TotalPaidThisYear` uses explicit UTC year boundaries (`new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc)`) rather than `p.PaymentDate.Year == currentYear`. Reason: EF Core can translate `.Year` comparisons but year boundaries are unambiguous and guaranteed to produce an efficient `BETWEEN`-style query in SQL. The `.SumAsync((decimal?)p.Amount) ?? 0m` pattern handles the empty-set case cleanly.
+- Decision: `TransactionIgnoredWarning` is suppressed in `CreateInMemoryContext()` via `.ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))`. Reason: EF Core InMemory transactions are no-ops by design; the warning-as-error default would make tests for `PaymentService` impossible without restructuring the service. The suppression is scoped to the test helper only. Alternative: wrap `BeginTransactionAsync` in a try/catch in PaymentService — rejected because it would hide real transaction issues in production.
+- Decision: `file` access modifier on test doubles and helper (`SuccessGatewayStub`, `NoopNotificationStub`, `TestHelpers`). Reason: C# 11 `file`-scoped types are invisible outside their source file, preventing accidental reuse and keeping the test file self-contained. Alternative: `internal` or `private` nested classes — rejected; `file` is the cleanest scope for test-only helpers.
+
+### Files created/modified
+- `backend/SubscriptionApp.Api/Dtos/Customers/CustomerDashboardResponse.cs`
+- `backend/SubscriptionApp.Api/Controllers/CustomersController.cs` (dashboard action added)
+- `backend/SubscriptionApp.Infrastructure/Services/ICustomerService.cs` (GetDashboardAsync + CustomerDashboardData)
+- `backend/SubscriptionApp.Infrastructure/Services/CustomerService.cs` (GetDashboardAsync implemented)
+- `backend/SubscriptionApp.Infrastructure/Services/PaymentService.cs` (amount > 0 guard)
+- `backend/SubscriptionApp.Tests/UnitTest1.cs` (all 4 test classes, 6 test cases)
+
+### Verification
+```bash
+export PATH="$PATH:/usr/local/share/dotnet"
+cd backend
+
+dotnet test SubscriptionApp.Tests --verbosity normal
+# Expected: Test Run Successful. Total tests: 6 Passed: 6
+
+dotnet run --project SubscriptionApp.Api
+# GET /api/customers/1/dashboard
+#   → { activeSubscriptionCount, unpaidThisMonth: [...], recentPayments: [...], totalPaidThisYear }
+```
+
+### Notes for the next agent (`frontend-builder`)
+- All backend endpoints are complete. The frontend should consume:
+  - `GET /api/customers` — customer list page
+  - `GET /api/customers/{id}/dashboard` — per-customer dashboard
+  - `GET /api/subscriptions?customerId={id}` — subscription list per customer
+  - `GET /api/external/debt-inquiry/{subscriptionId}` — "Query Debt" button on subscription detail
+  - `POST /api/payments` — "Pay Now" flow; handle 201, 409, 502 distinctly
+  - `PUT /api/subscriptions/{id}` — toggle Status Active↔Passive
+- All error responses follow `{ error: { code, message, details? } }`.
+- The `status` field in responses is an integer enum (0 = Active/Successful, 1 = Passive/Failed). Display human-readable labels in the UI.
+- Vite dev server proxy `/api` → `http://localhost:5072` must be configured in `vite.config.js` to avoid CORS issues.
+
+### Open questions raised
+- None.
+
+---
+
 <!--
 Template for future entries — copy and fill in.
 
