@@ -638,6 +638,98 @@ dotnet run --project SubscriptionApp.Api
 
 ---
 
+## Phase 8 — frontend-builder — 2026-05-11
+
+### What was built
+
+Vite + React 18 (plain JavaScript) single-page application in `/frontend`.
+
+**Scaffold & config:**
+- `npm create vite@latest . -- --template react` + `npm install react-router-dom`
+- `vite.config.js` — proxy `/api` → `http://localhost:5072` (actual backend port from launchSettings.json)
+- `src/main.jsx` — removed default `index.css` import; global styles loaded via `App.jsx`
+
+**API layer (`src/api/`):**
+- `client.js` — `apiFetch` wrapper: parses error body, attaches `.code`/`.details`/`.status` to thrown `Error`; handles 204 No Content
+- `customers.js` — `getCustomers`, `getCustomer`, `createCustomer`, `deleteCustomer`, `getDashboard`
+- `subscriptions.js` — `getSubscriptions(customerId?)`, `getSubscription`, `createSubscription`, `updateSubscription`, `deleteSubscription`
+- `payments.js` — `getPayments(subscriptionId?)`, `createPayment`
+- `external.js` — `getDebt(subscriptionId)`
+
+**Components (`src/components/`):**
+- `Button.jsx` — `variant` prop (`primary`/`secondary`/`danger`), `small`, `disabled`
+- `Modal.jsx` — overlay with Escape key handler, click-outside-to-close
+- `Table.jsx` — column config with optional `render` fn; empty-state row
+- `LoadingSpinner.jsx` — CSS spin animation
+- `ErrorBanner.jsx` — dismissible red banner; renders nothing when `message` is null
+
+**Pages (`src/pages/`):**
+- `CustomersPage.jsx` — customer table, Add Customer modal with client-side Turkish phone validation (`^\+90[0-9]{10}$`), delete with confirmation, row click navigates to `/subscriptions?customerId={id}`
+- `SubscriptionsPage.jsx` — customer dropdown filter (synced to `?customerId=` query param), add/edit/delete modals; edit allows Status/ProviderName/BillingDayOfMonth only; BillingDayOfMonth clamped to 1–28; row click navigates to `/subscriptions/{id}`
+- `SubscriptionDetailPage.jsx` — detail card, "Query Debt" button → debt card with amount/period/currency, "Pay Now" button → payment modal pre-filled with debt amount; handles 409 (DUPLICATE_PAYMENT, INACTIVE_SUBSCRIPTION) and 502 (gateway errors) distinctly via error banner
+- `DashboardPage.jsx` — customer dropdown; on select renders 3 stat cards (Active Subs, Unpaid Count, Total Paid This Year) + Unpaid This Month table + Recent Payments table (last 10)
+
+**Styling (`src/styles/global.css`):**
+Single CSS file with CSS custom properties (--color-primary, --color-bg, etc.). Components: nav, page, card, table, modal, form, button, badge, spinner, toast, debt-card, dashboard-grid, stat-card. Professional banking palette (navy primary, muted grays, no gradients or animations except spinner).
+
+**Routing (`src/App.jsx`):** React Router v6, top nav with `NavLink` active state, 5 routes.
+
+**Build result:** `vite build` — 38 modules, 0 errors, 0 warnings.
+
+### Key decisions
+- Decision: `client.js` reads the error body even on non-2xx responses instead of calling `EnsureSuccessStatusCode` equivalent. Reason: the backend returns structured `{ error: { code, message } }` on 400/404/409/502 — discarding that body would lose the user-friendly message. The error object exposes `.code` so pages can branch on specific codes if needed.
+- Decision: Enum values are displayed via index arrays (`SUB_TYPES[r.subscriptionType]`) rather than a switch or object map. Reason: the backend returns integer enum values; the display labels are stable and ordered, so array access by index is the simplest correct approach.
+- Decision: No CSS modules, no styled-components — one `global.css` with BEM-light class names. Reason: spec explicitly says plain CSS; for a banking case study with 4 pages, a single file is easier to review than per-component files and avoids build configuration.
+- Decision: Toasts are implemented as ephemeral state (`setToast(msg)`) dismissed on click rather than via a timer. Reason: no global Context or timer management needed; click-to-dismiss is sufficient for a case study demo.
+
+### Files created/modified
+- `frontend/vite.config.js`
+- `frontend/src/main.jsx`
+- `frontend/src/App.jsx`
+- `frontend/src/api/client.js`
+- `frontend/src/api/customers.js`
+- `frontend/src/api/subscriptions.js`
+- `frontend/src/api/payments.js`
+- `frontend/src/api/external.js`
+- `frontend/src/components/Button.jsx`
+- `frontend/src/components/Modal.jsx`
+- `frontend/src/components/Table.jsx`
+- `frontend/src/components/LoadingSpinner.jsx`
+- `frontend/src/components/ErrorBanner.jsx`
+- `frontend/src/styles/global.css`
+- `frontend/src/pages/CustomersPage.jsx`
+- `frontend/src/pages/SubscriptionsPage.jsx`
+- `frontend/src/pages/SubscriptionDetailPage.jsx`
+- `frontend/src/pages/DashboardPage.jsx`
+
+### How to run
+```bash
+# Terminal 1 — backend (Docker container must be running)
+export PATH="$PATH:/usr/local/share/dotnet"
+cd backend && dotnet run --project SubscriptionApp.Api
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
+# Open http://localhost:5173
+```
+
+### End-to-end flow to verify
+1. **Customers** → Add Customer → fill form → Create → row appears in table
+2. Click customer name → Subscriptions filtered by that customer
+3. **Subscriptions** → Add Subscription → fill form → Create → row appears
+4. Click provider name → **Subscription Detail** → Query Debt → debt card appears → Pay Now → Confirm → success toast
+5. Pay again for same period → 409 `DUPLICATE_PAYMENT` shown in error banner
+6. **Dashboard** → select customer → stat cards + unpaid list + recent payments render
+
+### Notes for the next agent (`documentation-finalizer`)
+- Screenshots to capture: Customers list, Add Customer modal with validation error, Subscriptions filtered by customer, Subscription Detail with debt card, payment error banner (409), Dashboard with all 4 sections populated.
+- The AI Usage section in the final README should note: all 9 phases were AI-generated with Claude Code; human review happened at each PHASE_LOG entry; the Docker/port decisions (Azure SQL Edge, port 5072) were driven by runtime errors and corrected interactively.
+
+### Open questions raised
+- None.
+
+---
+
 <!--
 Template for future entries — copy and fill in.
 
