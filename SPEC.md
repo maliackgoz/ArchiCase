@@ -12,9 +12,9 @@ Build a Subscription & Auto-Payment Reminder application: customers register uti
 
 ## Tech Stack (fixed, do not deviate)
 
-- **Backend:** .NET 8 Web API, C#
+- **Backend:** .NET 10 Web API, C#
 - **Frontend:** React 18 (Vite), plain JavaScript, plain CSS — no TypeScript, no Tailwind, no UI libraries, no Axios
-- **Database:** Microsoft SQL Server LocalDB via Entity Framework Core 8 (code-first + migrations)
+- **Database:** Azure SQL Edge (ARM64-native Docker image, SQL Server-compatible) via Entity Framework Core 10 (code-first + migrations)
 - **Validation:** FluentValidation
 - **Testing:** xUnit + EF Core InMemory provider (critical business rules only)
 - **API docs:** Swashbuckle (Swagger UI in development)

@@ -34,7 +34,7 @@ This phase is what wins or loses the interview after the code is correct. Docume
 5. **`/README.md`** (root) — student-facing and reviewer-facing:
    - Project description (2 paragraphs)
    - Tech stack
-   - Prerequisites (.NET 8 SDK, Node 18+, SQL Server LocalDB)
+   - Prerequisites (.NET 10 SDK, Node 18+, Docker Desktop)
    - Setup steps (clone, `dotnet ef database update`, `dotnet run`, `npm install`, `npm run dev`)
    - Project structure tree
    - How to run tests (`dotnet test`)

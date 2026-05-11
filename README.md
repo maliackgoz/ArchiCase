@@ -8,9 +8,9 @@ You're about to build this project phase-by-phase. The architecture, specificati
 
 ## Prerequisites
 
-- .NET 8 SDK
+- .NET 10 SDK
 - Node.js 18+
-- SQL Server LocalDB (comes with Visual Studio or as a standalone installer)
+- Docker Desktop (for SQL Server 2022 container)
 - Git
 - Claude Code CLI installed and authenticated
 

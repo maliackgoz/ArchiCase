@@ -47,7 +47,7 @@ These are deliberately scoped OUT of the core deliverable. Add only after Phase 
 
 ### Integration tests
 - `WebApplicationFactory<Program>` based
-- Hit real endpoints, real DB (Testcontainers or LocalDB with throwaway DB)
+- Hit real endpoints, real DB (Testcontainers with a throwaway SQL Server container)
 - Test the full payment flow end-to-end
 
 ### Frontend tests

@@ -33,7 +33,7 @@ You are the domain modeler. You run **only in Phase 2**.
 ## Critical requirements
 - **Money fields:** `decimal(18,2)` configured via `HasPrecision(18, 2)`.
 - **Period field:** string, max length 7, with a CHECK constraint matching the regex (or validate at write-time in service layer — note this decision in PHASE_LOG).
-- **Unique index:** the filtered unique index on Payment is non-negotiable. Use `HasIndex(...).IsUnique().HasFilter("[Status] = 0")` (where 0 is the int value of `Successful` enum).
+- **Unique index:** the filtered unique index on Payment is non-negotiable. Use `HasIndex(...).IsUnique().HasFilter("[Status] = 0")` (where 0 is the int value of `Successful` enum — SQL Server bracket notation for column names).
 - **Cascade delete:** Customer→Subscription→Payment cascades. Explicitly configure with `OnDelete(DeleteBehavior.Cascade)`.
 - **Add inline comments** on every non-obvious configuration line explaining what it does.
 

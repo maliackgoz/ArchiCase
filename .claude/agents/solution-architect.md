@@ -29,8 +29,8 @@ You are the solution architect agent. You run **only in Phase 1**.
    - **Api:** Swashbuckle.AspNetCore, FluentValidation.AspNetCore, Microsoft.EntityFrameworkCore.Design
    - **Infrastructure:** Microsoft.EntityFrameworkCore, Microsoft.EntityFrameworkCore.SqlServer, Microsoft.EntityFrameworkCore.Tools
    - **Tests:** Microsoft.EntityFrameworkCore.InMemory, FluentAssertions
-6. Configure `appsettings.json` with a LocalDB connection string named `DefaultConnection`:
-   `Server=(localdb)\\mssqllocaldb;Database=SubscriptionAppDb;Trusted_Connection=True;MultipleActiveResultSets=true`
+6. Configure `appsettings.json` with a SQL Server connection string named `DefaultConnection`:
+   `Server=localhost,1433;Database=SubscriptionAppDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True`
 7. Write a minimal `Program.cs` that:
    - Registers controllers
    - Registers Swagger (only in Development)

@@ -6,7 +6,7 @@ Every specialist agent reads this file before doing anything else. It defines th
 
 ## Project Overview
 
-This repository is a banking-domain case study: a Subscription & Auto-Payment Reminder application built as a .NET 8 Web API + React (Vite, plain JS) front-end on top of EF Core 8 + SQL Server LocalDB. The full specification lives in [SPEC.md](./SPEC.md). The build is divided into 9 sequential phases, each owned by a single specialist agent with a tight, non-overlapping scope. A human (the student) reviews the output of each phase and manually invokes the next.
+This repository is a banking-domain case study: a Subscription & Auto-Payment Reminder application built as a .NET 10 Web API + React (Vite, plain JS) front-end on top of EF Core 10 + Azure SQL Edge (Docker, ARM64-native SQL Server). The full specification lives in [SPEC.md](./SPEC.md). The build is divided into 9 sequential phases, each owned by a single specialist agent with a tight, non-overlapping scope. A human (the student) reviews the output of each phase and manually invokes the next.
 
 ---
 

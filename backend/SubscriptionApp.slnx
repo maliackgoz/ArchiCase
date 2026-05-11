@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="SubscriptionApp.Api/SubscriptionApp.Api.csproj" />
+  <Project Path="SubscriptionApp.Domain/SubscriptionApp.Domain.csproj" />
+  <Project Path="SubscriptionApp.Infrastructure/SubscriptionApp.Infrastructure.csproj" />
+  <Project Path="SubscriptionApp.Tests/SubscriptionApp.Tests.csproj" />
+</Solution>
