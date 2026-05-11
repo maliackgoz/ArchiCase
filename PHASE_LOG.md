@@ -96,6 +96,165 @@ dotnet build SubscriptionApp.slnx             # should print: Build succeeded. 0
 
 ---
 
+## Phase 2 — domain-modeler — 2026-05-11
+
+### What was built
+
+**Domain project** (zero NuGet dependencies — verified):
+- `Enums/SubscriptionType.cs` — Electricity(0), Water(1), Internet(2), Gsm(3), NaturalGas(4)
+- `Enums/SubscriptionStatus.cs` — Active(0), Passive(1)
+- `Enums/PaymentStatus.cs` — Successful(0), Failed(1) — **Successful must remain 0** (filtered index relies on this)
+- `Entities/Customer.cs`, `Subscription.cs`, `Payment.cs` — pure POCOs, no EF attributes, non-virtual nav properties
+- `Exceptions/DomainException.cs` (base, maps to 409), `DuplicatePaymentException`, `InactiveSubscriptionException`, `InvalidPeriodException`, `NotFoundException` (maps to 404, NOT a DomainException subclass)
+
+**Infrastructure project:**
+- `Persistence/AppDbContext.cs` — three DbSets, applies configurations via `ApplyConfiguration`
+- `Persistence/Configurations/CustomerConfiguration.cs` — unique index on Email, max lengths
+- `Persistence/Configurations/SubscriptionConfiguration.cs` — compound unique index on (ProviderName, SubscriptionNumber), CASCADE FK to Customer
+- `Persistence/Configurations/PaymentConfiguration.cs` — `decimal(18,2)` on Amount, Period maxLength 7, filtered unique index on (SubscriptionId, Period) WHERE [Status] = 0, CASCADE FK to Subscription
+- `Persistence/DbInitializer.cs` — idempotent seed: 3 customers (Ahmet Yılmaz, Fatma Kaya, Mehmet Demir), 5 subscriptions (BEDAŞ, Türk Telekom, İSKİ, Türkcell, İGDAŞ)
+
+**Api project:**
+- `Program.cs` — wired `AddDbContext<AppDbContext>` with `UseSqlServer`, seeder called on startup in Development
+
+**Migration:**
+- `InitialCreate` generated and applied. `SubscriptionAppDb` created in the Docker SQL Edge container.
+
+### Key decisions
+- Decision: `NotFoundException` is NOT a subclass of `DomainException`. Reason: 404 (not found) is semantically different from 409 (business rule violation). Sharing the same base class would require the middleware to differentiate by type anyway. Alternative: single base Exception hierarchy — rejected to keep the middleware mapping explicit and readable.
+- Decision: Period validated in service layer, not via DB CHECK constraint. Reason: SQL Server's LIKE-based CHECK constraints cannot fully validate `YYYY-MM` (they cannot enforce the month range 01–12). Service-layer validation is simpler and sufficient given the layered-defense approach. Alternative: add a partial CHECK `LIKE '[0-9][0-9][0-9][0-9]-[01][0-9]'` — rejected because it still allows months 13–19 and adds schema complexity for marginal benefit.
+- Decision: Nav properties are non-virtual. Reason: lazy loading is disabled. Non-virtual nav properties enable explicit `.Include()` queries in services without the risk of N+1 surprises from accidental lazy loads. Alternative: omit nav properties entirely — rejected because explicit `.Include()` in service queries is cleaner than manual FK joins.
+- Decision: `PaymentStatus.Successful = 0` is documented with an inline comment in `PaymentStatus.cs`. Reason: the filtered index `[Status] = 0` will silently break if this value ever changes. The comment makes the coupling visible to future developers.
+
+### Files created/modified
+- `backend/SubscriptionApp.Domain/Enums/SubscriptionType.cs`
+- `backend/SubscriptionApp.Domain/Enums/SubscriptionStatus.cs`
+- `backend/SubscriptionApp.Domain/Enums/PaymentStatus.cs`
+- `backend/SubscriptionApp.Domain/Entities/Customer.cs`
+- `backend/SubscriptionApp.Domain/Entities/Subscription.cs`
+- `backend/SubscriptionApp.Domain/Entities/Payment.cs`
+- `backend/SubscriptionApp.Domain/Exceptions/DomainException.cs`
+- `backend/SubscriptionApp.Domain/Exceptions/DuplicatePaymentException.cs`
+- `backend/SubscriptionApp.Domain/Exceptions/InactiveSubscriptionException.cs`
+- `backend/SubscriptionApp.Domain/Exceptions/InvalidPeriodException.cs`
+- `backend/SubscriptionApp.Domain/Exceptions/NotFoundException.cs`
+- `backend/SubscriptionApp.Infrastructure/Persistence/AppDbContext.cs`
+- `backend/SubscriptionApp.Infrastructure/Persistence/Configurations/CustomerConfiguration.cs`
+- `backend/SubscriptionApp.Infrastructure/Persistence/Configurations/SubscriptionConfiguration.cs`
+- `backend/SubscriptionApp.Infrastructure/Persistence/Configurations/PaymentConfiguration.cs`
+- `backend/SubscriptionApp.Infrastructure/Persistence/DbInitializer.cs`
+- `backend/SubscriptionApp.Infrastructure/Migrations/` (InitialCreate)
+- `backend/SubscriptionApp.Api/Program.cs` (DbContext + DbInitializer wired)
+
+### Verification commands the student should run
+```bash
+export PATH="$PATH:/usr/local/share/dotnet:$HOME/.dotnet/tools"
+cd backend
+
+# Migration is applied — confirm:
+dotnet ef migrations list --project SubscriptionApp.Infrastructure --startup-project SubscriptionApp.Api
+# Expected: 20260511122352_InitialCreate (Applied)
+
+# Build still clean:
+dotnet build SubscriptionApp.slnx
+
+# Start the API and open Swagger:
+dotnet run --project SubscriptionApp.Api
+# Navigate to http://localhost:5000/swagger
+# (No endpoints yet — but the app should start without errors and seed data runs)
+```
+
+### Errata / runtime observations
+- App listens on **http://localhost:5072** (set by `launchSettings.json`), not port 5000. The `ExternalServices:BaseUrl` key in `appsettings.json` (added in Phase 5) must use `http://localhost:5072`. The `external-services-builder` agent must update this value — add a note when it runs.
+
+### Notes for the next agent (`customer-feature-builder`)
+- All entities, enums, and exceptions are in place. The Domain project has zero NuGet dependencies.
+- `AppDbContext` is registered as Scoped (default for `AddDbContext`). Services that use it should also be Scoped.
+- Nav properties are non-virtual — always use explicit `.Include()` in queries; never rely on lazy loading.
+- `NotFoundException` does NOT inherit from `DomainException`. The exception middleware must catch them separately: `NotFoundException` → 404, `DomainException` → 409.
+- The `DomainException` base class exposes a `Code` string (e.g. `"DUPLICATE_PAYMENT"`) — use this as the `code` field in the error response shape.
+- DbInitializer seeds on every `Development` startup (idempotent — skips if data exists). Don't add seeding logic elsewhere.
+- Folder conventions to follow for services: `Infrastructure/Services/`, for controllers: `Api/Controllers/`, for DTOs: `Api/Dtos/<Resource>/`, for validators: `Api/Validators/<Resource>/`, for mappings: `Api/Mapping/`.
+
+### Open questions raised
+- None.
+
+---
+
+## Phase 3 — customer-feature-builder — 2026-05-11
+
+### What was built
+
+**Api project:**
+- `Dtos/Customers/CreateCustomerRequest.cs` — `FullName`, `Email`, `PhoneNumber`
+- `Dtos/Customers/CustomerResponse.cs` — mirrors entity + `SubscriptionCount` (computed from nav property)
+- `Validators/Customers/CreateCustomerRequestValidator.cs` — `NotEmpty` + `MaximumLength` on all fields; `EmailAddress()` on Email; Turkish phone regex `^\+90[0-9]{10}$` with custom message on PhoneNumber
+- `Mapping/CustomerMappings.cs` — static extension methods `ToEntity(this CreateCustomerRequest)` and `ToResponse(this Customer)`; `SubscriptionCount` uses `?.Count ?? 0` to handle cases where nav property is not loaded
+- `Controllers/CustomersController.cs` — `GET /api/customers`, `GET /api/customers/{id}`, `POST /api/customers` (201 + Location header), `DELETE /api/customers/{id}` (204)
+- `Middleware/ExceptionHandlingMiddleware.cs` — catches `NotFoundException` → 404, `DomainException` → 409, `Exception` → 500; uniform JSON shape `{ "error": { "code", "message" } }`
+- `Program.cs` — updated with `AddFluentValidationAutoValidation()`, `AddValidatorsFromAssemblyContaining<CreateCustomerRequestValidator>()`, `AddScoped<ICustomerService, CustomerService>()`, `UseMiddleware<ExceptionHandlingMiddleware>()` (first middleware), custom `InvalidModelStateResponseFactory` returning consistent 400 error shape
+
+**Infrastructure project:**
+- `Services/ICustomerService.cs` — `GetAllAsync`, `GetByIdAsync`, `CreateAsync`, `DeleteAsync`
+- `Services/CustomerService.cs` — EF Core scoped service; email uniqueness check throws `DomainException("DUPLICATE_EMAIL", …)`; `GetAllAsync` and `GetByIdAsync` use `.Include(c => c.Subscriptions)` for SubscriptionCount; `CreatedAt` set to `DateTime.UtcNow` in `CreateAsync`
+
+**Build result:** `0 errors, 0 warnings`
+
+### Key decisions
+- Decision: `InvalidModelStateResponseFactory` overrides the default ASP.NET Core 400 response shape. Reason: FluentValidation auto-validation produces `ValidationProblemDetails` by default, which differs from the spec's `{ "error": { "code", "message", "details" } }` shape. Overriding the factory keeps all error shapes uniform without needing to catch `ValidationException` in the middleware. Alternative: catch `FluentValidation.ValidationException` in middleware — rejected because FluentValidation auto-validation swallows the exception before it propagates; the factory override is the correct integration point.
+- Decision: `ICustomerService` and `CustomerService` live in `Infrastructure/Services/` (not a separate `Application` layer). Reason: spec uses a pragmatic 3-layer architecture (Domain, Infrastructure, Api); adding an `Application` layer is a premature abstraction for this scope. Alternative: move to `Api/Services/` — rejected because services depend on `AppDbContext` which lives in Infrastructure, so co-locating them avoids a circular reference.
+- Decision: Service methods operate on domain entities (`Customer`), not DTOs. Reason: keeps the service layer reusable across controllers without depending on Api-layer types. Mapping happens at the controller boundary only. Alternative: pass DTOs all the way through — rejected per SPEC.md working principle "DTOs only at the API boundary."
+- Decision: `ExceptionHandlingMiddleware` does NOT handle `FluentValidation.ValidationException`. Reason: with `AddFluentValidationAutoValidation()`, validation failures are caught by the MVC pipeline and routed to `InvalidModelStateResponseFactory` before the action executes. The exception never reaches middleware. Alternative: disable auto-validation and throw manually — rejected; more boilerplate with no benefit.
+- Decision: Middleware is registered as the very first `app.Use*` call (before seeding, Swagger, routing). Reason: ensures that any unhandled exception thrown during request processing — including from controllers, services, and future middleware — is caught. Alternative: register after Swagger/HTTPS — rejected because exceptions from those middlewares would bypass the handler.
+
+### Files created/modified
+- `backend/SubscriptionApp.Api/Dtos/Customers/CreateCustomerRequest.cs`
+- `backend/SubscriptionApp.Api/Dtos/Customers/CustomerResponse.cs`
+- `backend/SubscriptionApp.Api/Validators/Customers/CreateCustomerRequestValidator.cs`
+- `backend/SubscriptionApp.Api/Mapping/CustomerMappings.cs`
+- `backend/SubscriptionApp.Api/Controllers/CustomersController.cs`
+- `backend/SubscriptionApp.Api/Middleware/ExceptionHandlingMiddleware.cs`
+- `backend/SubscriptionApp.Api/Program.cs` (FluentValidation, CustomerService DI, middleware registered)
+- `backend/SubscriptionApp.Infrastructure/Services/ICustomerService.cs`
+- `backend/SubscriptionApp.Infrastructure/Services/CustomerService.cs`
+
+### Verification commands the student should run
+```bash
+export PATH="$PATH:/usr/local/share/dotnet"
+cd backend
+
+# Build must be clean
+dotnet build SubscriptionApp.slnx
+# Expected: Build succeeded. 0 Warning(s) 0 Error(s)
+
+# Start the API (Docker container must be running)
+dotnet run --project SubscriptionApp.Api
+# Navigate to http://localhost:5072/swagger
+
+# Smoke tests in Swagger:
+# GET  /api/customers           → 200 with 3 seeded customers, each with SubscriptionCount
+# GET  /api/customers/1         → 200 with Ahmet Yılmaz + SubscriptionCount = 2
+# POST /api/customers { "fullName":"Test","email":"t@t.com","phoneNumber":"+905551111111" }
+#                               → 201 with Location header
+# POST /api/customers (same email again) → 409 { "error": { "code": "DUPLICATE_EMAIL", ... } }
+# POST /api/customers { "phoneNumber":"bad" } → 400 { "error": { "code": "VALIDATION_ERROR", ... } }
+# GET  /api/customers/9999      → 404 { "error": { "code": "NOT_FOUND", ... } }
+# DELETE /api/customers/{id}    → 204
+```
+
+### Notes for the next agent (`subscription-feature-builder`)
+- The customer vertical-slice is the template to follow: DTOs in `Api/Dtos/<Resource>/`, validators in `Api/Validators/<Resource>/`, service interface + implementation in `Infrastructure/Services/`, hand-written mapping in `Api/Mapping/`, thin controller in `Api/Controllers/`.
+- `ExceptionHandlingMiddleware` is already in place. Do NOT modify it — just throw the right domain exceptions from your service and they will be caught automatically.
+- `NotFoundException` → 404, `DomainException` → 409. Both constructors require `(string code, string message)`.
+- For the subscription `PUT` endpoint: allow updating `Status`, `ProviderName`, `BillingDayOfMonth` — never `CustomerId`. Validate `BillingDayOfMonth` between 1 and 28 in the validator.
+- Register `ISubscriptionService → SubscriptionService` (Scoped) in `Program.cs` — a `TODO` comment is already there.
+- The `GET /api/subscriptions?customerId=` filter endpoint should return all subscriptions for a customer, including the customer's FullName in the response DTO.
+
+### Open questions raised
+- None.
+
+---
+
 <!--
 Template for future entries — copy and fill in.
 
