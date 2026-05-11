@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using SubscriptionApp.Api.Middleware;
 using SubscriptionApp.Api.Validators.Customers;
 using SubscriptionApp.Api.Validators.Subscriptions;
+using SubscriptionApp.Infrastructure.ExternalServices;
 using SubscriptionApp.Infrastructure.Persistence;
 using SubscriptionApp.Infrastructure.Services;
 
@@ -51,7 +52,22 @@ builder.Services.AddValidatorsFromAssemblyContaining<CreateCustomerRequestValida
 // ── Application services ─────────────────────────────────────────────────────
 builder.Services.AddScoped<ICustomerService, CustomerService>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
-// TODO (external-services-builder): register typed HttpClients (IDebtInquiryClient, IPaymentGatewayClient, INotificationClient)
+// ── Typed HttpClients (self-loopback to mock external endpoints) ──────────────
+var externalBase = builder.Configuration["ExternalServices:BaseUrl"]!;
+builder.Services.AddHttpClient<IDebtInquiryClient, DebtInquiryClient>(c =>
+{
+    c.BaseAddress = new Uri(externalBase);
+    c.Timeout = TimeSpan.FromSeconds(5);
+});
+builder.Services.AddHttpClient<IPaymentGatewayClient, PaymentGatewayClient>(c =>
+{
+    c.BaseAddress = new Uri(externalBase);
+    c.Timeout = TimeSpan.FromSeconds(10);
+});
+builder.Services.AddHttpClient<INotificationClient, NotificationClient>(c =>
+{
+    c.BaseAddress = new Uri(externalBase);
+});
 // TODO (payment-feature-builder): register IPaymentService → PaymentService (Scoped)
 
 // ─────────────────────────────────────────────────────────────────────────────

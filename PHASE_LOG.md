@@ -334,6 +334,104 @@ dotnet run --project SubscriptionApp.Api
 
 ---
 
+## Phase 5 — external-services-builder — 2026-05-11
+
+### What was built
+
+**Api project — mock external controllers (`Api/Controllers/External/`):**
+- `DebtInquiryController.cs` — `GET /api/external/debt-inquiry/{subscriptionId}`. Looks up subscription type in DB, uses `new Random(subscriptionId)` (seeded) for deterministic amounts. Ranges: Electricity 100–400, Water 50–150, Internet 150–250, Gsm 80–200, NaturalGas 120–350. Returns `{ subscriptionId, amount, period (yyyy-MM), currency: "TRY" }`. Returns 404 if subscription not found.
+- `PaymentGatewayController.cs` — `POST /api/external/payment-gateway`. Accepts `{ subscriptionId, amount }`. ~10% random failure. Success (200): `{ success: true, transactionId: "TXN-{guid}" }`. Failure (400): `{ success: false, errorCode: "INSUFFICIENT_FUNDS" | "GATEWAY_TIMEOUT" | "DECLINED" }`.
+- `NotificationController.cs` — `POST /api/external/notifications`. Accepts `{ channel, recipient, message }`. Logs via `ILogger`, returns 200.
+
+**Infrastructure project — typed HttpClients (`Infrastructure/ExternalServices/`):**
+- `Models/DebtInquiryResponse.cs` — SubscriptionId, Amount, Period, Currency
+- `Models/PaymentGatewayRequest.cs` — SubscriptionId, Amount
+- `Models/PaymentGatewayResponse.cs` — Success, TransactionId?, ErrorCode?
+- `Models/NotificationRequest.cs` — Channel, Recipient, Message
+- `IDebtInquiryClient` / `DebtInquiryClient` — `GetDebtAsync(int subscriptionId)`, 5s timeout, logs method/URL/status/ms
+- `IPaymentGatewayClient` / `PaymentGatewayClient` — `ProcessPaymentAsync(int subscriptionId, decimal amount)`, 10s timeout, logs; does NOT call `EnsureSuccessStatusCode` — both 200 and 400 carry a valid `PaymentGatewayResponse` body
+- `INotificationClient` / `NotificationClient` — `SendAsync(string channel, string recipient, string message)`, calls `EnsureSuccessStatusCode`
+
+**Configuration:**
+- `appsettings.json` — `ExternalServices:BaseUrl` set to `http://localhost:5072`
+- `Program.cs` — three `AddHttpClient<TInterface, TImpl>` registrations with BaseAddress + timeouts
+
+**Build result:** initial build failed (6 errors: missing `using Microsoft.Extensions.Logging;` in three client files). Fixed by adding the using directive. Final build: `0 errors, 0 warnings`.
+
+### Key decisions
+- Decision: `DebtInquiryController` injects `AppDbContext` to look up subscription type. Reason: the mock must return type-appropriate amounts per spec, which requires knowing the `SubscriptionType`. Alternative: derive amount range from `subscriptionId % N` without DB lookup — rejected because it ignores the type and produces misleading test data (e.g., an Internet subscription returning a water-range amount).
+- Decision: `PaymentGatewayClient.ProcessPaymentAsync` does NOT call `EnsureSuccessStatusCode`. Reason: the gateway mock returns HTTP 400 for declined payments but still sends a valid `PaymentGatewayResponse` body. `EnsureSuccessStatusCode()` would throw `HttpRequestException` before the body is read, preventing `PaymentService` from extracting the `ErrorCode`. The caller (`PaymentService` in Phase 6) checks `response.Success` to branch logic. Alternative: use a 200 response for all outcomes with a `Success` flag — rejected because 400 for failures is a realistic gateway contract.
+- Decision: `INotificationClient.SendAsync` does call `EnsureSuccessStatusCode`. Reason: a failed notification is a non-critical infrastructure error (not a payment outcome), so throwing is appropriate. The caller in Phase 6 wraps notification in fire-and-forget, so a throw there just logs and drops.
+- Decision: HttpClients log at `Information` level using `ILogger<T>` from `Microsoft.Extensions.Logging`. The namespace is available transitively through EF Core in the Infrastructure project without an additional NuGet package.
+
+### HttpClient interface contracts (for `payment-feature-builder`)
+
+```csharp
+// 1. Debt Inquiry — call BEFORE initiating payment to show user the current debt
+Task<DebtInquiryResponse> IDebtInquiryClient.GetDebtAsync(int subscriptionId);
+// Response: { SubscriptionId, Amount (decimal), Period ("yyyy-MM"), Currency ("TRY") }
+
+// 2. Payment Gateway — call INSIDE a DB transaction to process payment
+Task<PaymentGatewayResponse> IPaymentGatewayClient.ProcessPaymentAsync(int subscriptionId, decimal amount);
+// Response: { Success (bool), TransactionId? (string), ErrorCode? (string) }
+// Success = true  → record PaymentStatus.Successful, set ExternalTransactionId = TransactionId
+// Success = false → record PaymentStatus.Failed, throw ExternalServiceException(ErrorCode)
+
+// 3. Notification — call AFTER committing the successful payment (fire-and-forget)
+Task INotificationClient.SendAsync(string channel, string recipient, string message);
+// channel: "SMS" or "EMAIL", recipient: customer phone or email, message: free text
+```
+
+### Files created/modified
+- `backend/SubscriptionApp.Api/Controllers/External/DebtInquiryController.cs`
+- `backend/SubscriptionApp.Api/Controllers/External/PaymentGatewayController.cs`
+- `backend/SubscriptionApp.Api/Controllers/External/NotificationController.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/Models/DebtInquiryResponse.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/Models/PaymentGatewayRequest.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/Models/PaymentGatewayResponse.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/Models/NotificationRequest.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/IDebtInquiryClient.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/DebtInquiryClient.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/IPaymentGatewayClient.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/PaymentGatewayClient.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/INotificationClient.cs`
+- `backend/SubscriptionApp.Infrastructure/ExternalServices/NotificationClient.cs`
+- `backend/SubscriptionApp.Api/appsettings.json` (`ExternalServices:BaseUrl` added)
+- `backend/SubscriptionApp.Api/Program.cs` (three `AddHttpClient` registrations)
+
+### Verification commands the student should run
+```bash
+export PATH="$PATH:/usr/local/share/dotnet"
+cd backend
+dotnet build SubscriptionApp.slnx
+# Expected: Build succeeded. 0 Warning(s) 0 Error(s)
+
+dotnet run --project SubscriptionApp.Api
+# Navigate to http://localhost:5072/swagger
+
+# Smoke tests in Swagger:
+# GET  /api/external/debt-inquiry/1   → 200 { subscriptionId:1, amount:<consistent>, period:"2026-05", currency:"TRY" }
+# GET  /api/external/debt-inquiry/1   → same amount every time (seeded random)
+# GET  /api/external/debt-inquiry/999 → 404
+# POST /api/external/payment-gateway { subscriptionId:1, amount:150 }
+#                                     → 200 { success:true, transactionId:"TXN-..." } (~90%)
+#                                        OR 400 { success:false, errorCode:"..." } (~10%)
+# POST /api/external/notifications { channel:"SMS", recipient:"+905551234567", message:"Paid" }
+#                                     → 200; check console for ILogger output
+```
+
+### Notes for the next agent (`payment-feature-builder`)
+- See "HttpClient interface contracts" section above for exact method signatures and branching logic.
+- `PaymentGatewayClient` returns a `PaymentGatewayResponse` regardless of HTTP status — check `response.Success`, not `HttpRequestException`.
+- Add `ExternalServiceException` to `Domain/Exceptions/` (maps to HTTP 502) and register it in `ExceptionHandlingMiddleware` (catch before the generic `Exception` catch).
+- The `PaymentService.CreateAsync` flow: load subscription → reject Passive → pre-check duplicate (app-level) → open `IDbContextTransaction` → call gateway → on success: insert Payment (Successful) + commit + fire-and-forget notification; on failure: insert Payment (Failed) + commit + throw `ExternalServiceException`.
+- Register `IPaymentService → PaymentService` (Scoped) in `Program.cs` — a TODO comment is already there.
+
+### Open questions raised
+- None.
+
+---
+
 <!--
 Template for future entries — copy and fill in.
 
