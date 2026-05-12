@@ -63,6 +63,9 @@ docker run \
 export PATH="$PATH:$HOME/.dotnet/tools"
 cd backend
 
+# Restore NuGet packages (fresh clone: without this, `dotnet ef` can fail with NETSDK1004 / missing project.assets.json)
+dotnet restore SubscriptionApp.slnx
+
 # Apply all migrations (creates SubscriptionAppDb and runs the demo seed)
 dotnet ef database update \
   --project SubscriptionApp.Infrastructure \
