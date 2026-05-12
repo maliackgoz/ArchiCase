@@ -54,6 +54,10 @@ public class SubscriptionService : ISubscriptionService
                 $"A subscription with provider '{subscription.ProviderName}' and number '{subscription.SubscriptionNumber}' already exists.");
 
         subscription.Status = SubscriptionStatus.Active;
+        // On create, the customer's chosen payment day defaults to the provider's last payment day
+        // (the latest acceptable date in the [billing, lastPayment] window).
+        if (subscription.PaymentDayOfMonth == 0)
+            subscription.PaymentDayOfMonth = subscription.LastPaymentDayOfMonth;
         subscription.CreatedAt = DateTime.UtcNow;
         _db.Subscriptions.Add(subscription);
         await _db.SaveChangesAsync();
@@ -61,7 +65,7 @@ public class SubscriptionService : ISubscriptionService
         return await GetByIdAsync(subscription.Id);
     }
 
-    public async Task<Subscription> UpdateAsync(int id, SubscriptionStatus status, string providerName, int billingDayOfMonth)
+    public async Task<Subscription> UpdateAsync(int id, SubscriptionStatus status, string providerName, int paymentDayOfMonth, bool isAutoPay)
     {
         var subscription = await _db.Subscriptions.FindAsync(id);
         if (subscription is null)
@@ -80,9 +84,19 @@ public class SubscriptionService : ISubscriptionService
                     $"A subscription with provider '{providerName}' and number '{subscription.SubscriptionNumber}' already exists.");
         }
 
+        // Payment day must sit inside the provider's [billing, lastPayment] window.
+        if (paymentDayOfMonth < subscription.BillingDayOfMonth ||
+            paymentDayOfMonth > subscription.LastPaymentDayOfMonth)
+        {
+            throw new DomainException("PAYMENT_DAY_OUT_OF_RANGE",
+                $"Payment day must be between {subscription.BillingDayOfMonth} (billing day) and {subscription.LastPaymentDayOfMonth} (last payment day).");
+        }
+
+        // BillingDayOfMonth and LastPaymentDayOfMonth are provider-owned and cannot be modified here.
         subscription.Status = status;
         subscription.ProviderName = providerName;
-        subscription.BillingDayOfMonth = billingDayOfMonth;
+        subscription.PaymentDayOfMonth = paymentDayOfMonth;
+        subscription.IsAutoPay = isAutoPay;
         await _db.SaveChangesAsync();
 
         return await GetByIdAsync(id);

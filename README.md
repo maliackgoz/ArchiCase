@@ -1,8 +1,19 @@
 # Subscription & Auto-Payment Reminder Application
 
-A full-stack banking case study demonstrating a 3-layer .NET 10 Web API with a React 18 frontend. The application manages customers, utility subscriptions (electricity, water, internet, GSM, natural gas), and payments with a real transactional payment flow including a mock external payment gateway.
+A full-stack banking case study: customers register their utility subscriptions (electricity, water, internet, GSM, natural gas), see live debt from a mock provider, pay through a mock gateway with a real transactional flow, and receive SMS + Email reminders before each provider-set deadline. A separate admin role monitors everything across the bank.
 
-This project was built using a 9-phase multi-agent AI workflow — each phase was handled by a specialist Claude Code agent with a bounded scope. See the [AI Usage Disclosure](#ai-usage-disclosure) section for full transparency.
+The codebase started as the output of a 9-phase multi-agent AI workflow and was extended afterwards into a portal-style experience with JWT auth, role-based access, auto-pay, provider-driven billing windows, and a notifications log. See the [AI Usage Disclosure](#ai-usage-disclosure) for the full development story.
+
+---
+
+## Highlights
+
+- **Mobile-bank-style portal.** Customer-driven onboarding (sign-up at the landing page), self-service subscription CRUD, debt query + one-click pay, payment history per subscription, reminders, and an auto-pay toggle.
+- **Provider-owned vs customer-owned days.** Provider supplies `BillingDayOfMonth` + `LastPaymentDayOfMonth` (= billing + 7); customer picks any `PaymentDayOfMonth` inside that window. Backend rejects out-of-range updates with 409 + the exact valid bounds.
+- **Two-channel reminders.** Reminders fan out on both SMS and Email, are persisted to a `Notifications` table, and are skipped entirely for auto-pay subscriptions (no noise when the bank is already handling charges).
+- **Admin = monitor + off-board.** Read-only customer / subscription analysis, per-customer dashboard drill-down, full notifications log with customer-name resolution. No mutation paths beyond customer delete.
+- **Four mock third-party REST services.** Debt inquiry, provider info, payment gateway (~10% random failure), notifications — each reached via a typed HttpClient with timeouts and structured logs.
+- **Transactional payment flow.** Pre-check + DB-level unique filtered index + commit-before-throw on gateway failure so failed attempts stay in the audit trail.
 
 ---
 
@@ -11,8 +22,9 @@ This project was built using a 9-phase multi-agent AI workflow — each phase wa
 | Layer | Technology |
 |---|---|
 | Backend API | .NET 10 Web API (controller-based) |
-| ORM | Entity Framework Core 10 + SQL Server provider |
-| Database | Azure SQL Edge (Docker — ARM64 native) |
+| Auth | `Microsoft.AspNetCore.Authentication.JwtBearer` + PBKDF2-SHA256 password hashing (BCL only, no extra NuGet) |
+| ORM | Entity Framework Core 10 |
+| Database | Azure SQL Edge (Docker, ARM64 native) |
 | Validation | FluentValidation 11 |
 | API docs | Swashbuckle / Swagger UI |
 | Tests | xUnit + EF Core InMemory + FluentAssertions |
@@ -25,8 +37,8 @@ This project was built using a 9-phase multi-agent AI workflow — each phase wa
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - Node.js 18+
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for the database container)
-- Git
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- `dotnet ef` global tool (`dotnet tool install --global dotnet-ef`)
 
 ---
 
@@ -48,10 +60,10 @@ docker run \
 ### 2. Apply migrations and run the backend
 
 ```bash
-export PATH="$PATH:/usr/local/share/dotnet"
+export PATH="$PATH:$HOME/.dotnet/tools"
 cd backend
 
-# Apply the database migration (creates SubscriptionAppDb and seeds data)
+# Apply all migrations (creates SubscriptionAppDb and runs the demo seed)
 dotnet ef database update \
   --project SubscriptionApp.Infrastructure \
   --startup-project SubscriptionApp.Api
@@ -62,7 +74,16 @@ dotnet run --project SubscriptionApp.Api
 # Swagger UI: http://localhost:5072/swagger
 ```
 
-Seed data is applied automatically on first startup in Development: 3 customers and 5 subscriptions.
+Seed data is applied on first startup in Development. It generates 3 customers + 1 admin + 9 subscriptions + several months of payment history, with payment days pinned relative to "today" (Turkey local) so every reminder/dashboard state is exercised. To reseed from scratch:
+
+```bash
+dotnet ef database drop --force \
+  --project SubscriptionApp.Infrastructure \
+  --startup-project SubscriptionApp.Api
+dotnet ef database update \
+  --project SubscriptionApp.Infrastructure \
+  --startup-project SubscriptionApp.Api
+```
 
 ### 3. Run the frontend
 
@@ -73,7 +94,20 @@ npm run dev
 # Frontend: http://localhost:5173
 ```
 
-The Vite dev server proxies all `/api` requests to `http://localhost:5072`.
+The Vite dev server proxies `/api/*` to `http://localhost:5072`.
+
+---
+
+## Demo accounts
+
+The landing page lists all four as click-to-fill chips. Or hit `POST /api/auth/login` directly.
+
+| Role | Email | Password | Scenario it demonstrates |
+|---|---|---|---|
+| Admin | `admin@bank.com` | `Admin1234!` | Customers list, subscription analysis, per-customer dashboard, notifications log |
+| Customer | `ahmet.yilmaz@example.com` | `Test1234!` | Caught up — every sub on auto-pay, no reminders, healthy dashboard |
+| Customer | `fatma.kaya@example.com` | `Test1234!` | Manual payer with mixed history — 1 overdue + 1 due-soon reminder, includes a failed-then-retried payment |
+| Customer | `mehmet.demir@example.com` | `Test1234!` | One "due today" reminder, one auto-pay sub, one Passive sub with a historical failure |
 
 ---
 
@@ -86,9 +120,10 @@ dotnet test SubscriptionApp.slnx
 ```
 
 Tests cover:
+
 1. Duplicate payment rejection
 2. Payment on passive subscription rejection
-3. Zero / negative amount rejection (theory — 3 inputs)
+3. Zero / negative amount rejection (xUnit `[Theory]`, 3 inputs)
 4. Dashboard unpaid-this-month calculation
 
 ---
@@ -100,37 +135,48 @@ ArchiCase/
 ├── backend/
 │   ├── SubscriptionApp.slnx
 │   ├── SubscriptionApp.Api/
-│   │   ├── Controllers/           # Thin controllers (Customers, Subscriptions, Payments, External)
-│   │   ├── Dtos/                  # Request / Response DTOs (at API boundary only)
-│   │   ├── Validators/            # FluentValidation validators
-│   │   ├── Mapping/               # Hand-written ToEntity / ToResponse extension methods
-│   │   ├── Middleware/            # ExceptionHandlingMiddleware → uniform error shape
-│   │   └── Program.cs
+│   │   ├── Controllers/                    # Thin controllers
+│   │   │   ├── AuthController.cs           # login, register
+│   │   │   ├── UsersController.cs          # /api/users/me/* (portal)
+│   │   │   ├── CustomersController.cs      # admin read-only + DELETE
+│   │   │   ├── SubscriptionsController.cs  # admin read-only GETs
+│   │   │   ├── PaymentsController.cs       # POST = customer-only, GETs = admin-only
+│   │   │   ├── NotificationsController.cs  # admin log viewer
+│   │   │   └── External/                   # 4 mock 3rd-party services
+│   │   ├── Dtos/  Validators/  Mapping/  Middleware/
+│   │   ├── Services/                       # JwtService
+│   │   └── Program.cs                      # JWT setup, FluentValidation, HttpClients, seeding
 │   ├── SubscriptionApp.Domain/
-│   │   ├── Entities/              # Customer, Subscription, Payment (pure POCOs)
-│   │   ├── Enums/                 # SubscriptionType, SubscriptionStatus, PaymentStatus
-│   │   └── Exceptions/            # DomainException (409), NotFoundException (404), ExternalServiceException (502)
+│   │   ├── Entities/                       # Customer, Subscription, Payment, User, Notification (POCOs only)
+│   │   ├── Enums/                          # SubscriptionType, SubscriptionStatus, PaymentStatus
+│   │   └── Exceptions/                     # DomainException (409), NotFoundException (404), ExternalServiceException (502)
 │   ├── SubscriptionApp.Infrastructure/
-│   │   ├── Persistence/           # AppDbContext, EF configurations, DbInitializer
-│   │   ├── Services/              # CustomerService, SubscriptionService, PaymentService
-│   │   └── ExternalServices/      # Typed HttpClients + Models
-│   └── SubscriptionApp.Tests/
-│       └── UnitTest1.cs           # 4 test classes, 6 test cases
+│   │   ├── Persistence/                    # AppDbContext, EF configurations, DbInitializer (demo seed)
+│   │   ├── Services/                       # CustomerService, SubscriptionService, PaymentService, AuthService, UserService
+│   │   ├── ExternalServices/               # 4 typed HttpClients + their models
+│   │   ├── Utilities/                      # PasswordHasher (PBKDF2), BusinessClock (Turkey time)
+│   │   └── Migrations/                     # 6 EF migrations
+│   └── SubscriptionApp.Tests/              # 6 xUnit tests
 ├── frontend/
 │   └── src/
-│       ├── api/                   # fetch wrapper + resource modules
-│       ├── components/            # Modal, Table, Button, LoadingSpinner, ErrorBanner
-│       ├── pages/                 # CustomersPage, SubscriptionsPage, SubscriptionDetailPage, DashboardPage
-│       └── styles/                # global.css
+│       ├── api/                            # fetch wrapper + per-resource modules (incl. JWT injection + 401 handler)
+│       ├── context/AuthContext.jsx         # Token storage + role-aware redirect helpers
+│       ├── components/                     # ProtectedRoute (role-gated), Modal, Table, Button, ...
+│       ├── pages/
+│       │   ├── LandingPage.jsx             # Sign-in + Sign-up tabs, demo-account chips
+│       │   ├── CustomersPage.jsx           # Admin: search by name/id + per-row Dashboard/Subs/Notifs/Delete
+│       │   ├── SubscriptionsPage.jsx       # Admin: multi-filter analysis view + summary stats
+│       │   ├── DashboardPage.jsx           # Admin: /dashboard/:customerId drill-down
+│       │   ├── NotificationsPage.jsx       # Admin: SMS/Email log with customer resolution
+│       │   ├── SubscriptionDetailPage.jsx  # Role-aware: debt query, payment, history
+│       │   └── portal/                     # PortalDashboardPage, PortalSubscriptionsPage, RemindersPage
+│       └── styles/global.css
 ├── docs/
 │   ├── ER-diagram.md
 │   ├── api-endpoints.md
 │   ├── flow-diagrams.md
 │   └── architecture.md
-├── SPEC.md
-├── AGENTS.md
-├── PHASE_LOG.md
-└── FUTURE_IMPROVEMENTS.md
+├── SPEC.md  AGENTS.md  PHASE_LOG.md  FUTURE_IMPROVEMENTS.md
 ```
 
 ---
@@ -139,71 +185,39 @@ ArchiCase/
 
 | Document | Contents |
 |---|---|
-| [docs/ER-diagram.md](./docs/ER-diagram.md) | Mermaid entity-relationship diagram + cardinality notes |
-| [docs/api-endpoints.md](./docs/api-endpoints.md) | Every endpoint: request/response schemas, all status codes |
-| [docs/flow-diagrams.md](./docs/flow-diagrams.md) | Sequence diagrams: happy path, duplicate, passive, gateway failure |
-| [docs/architecture.md](./docs/architecture.md) | 3-layer rationale, decimal/UTC decisions, transaction design |
-| [SPEC.md](./SPEC.md) | Full project specification (single source of truth) |
-| [PHASE_LOG.md](./PHASE_LOG.md) | Append-only log of every agent's decisions and output |
-| [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md) | Enhancements scoped out of the core deliverable |
+| [docs/ER-diagram.md](./docs/ER-diagram.md) | Mermaid ER diagram including User + Notification + the three-day subscription model |
+| [docs/api-endpoints.md](./docs/api-endpoints.md) | Every endpoint: auth, portal, admin, external mocks — request/response schemas + status codes + role matrix |
+| [docs/flow-diagrams.md](./docs/flow-diagrams.md) | Mermaid sequence diagrams: happy path, duplicate, passive, gateway failure, sign-up reuse, reminder fan-out, auto-pay batch |
+| [docs/architecture.md](./docs/architecture.md) | 3-layer rationale + auth, BusinessClock, role-based access, mock provider integration, day model, notifications-as-audit |
+| [SPEC.md](./SPEC.md) | Single source of truth — domain model, business rules, endpoint catalog, in/out of scope |
+| [PHASE_LOG.md](./PHASE_LOG.md) | Append-only log of every agent's decisions and the post-bootstrap iteration |
+| [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md) | Enhancements still scoped out |
 
 ---
 
 ## AI Usage Disclosure
 
-This project was built with AI assistance using a multi-agent workflow with Claude Code. Development was orchestrated as 9 sequential phases, each handled by a specialist agent with a bounded scope.
+This project was built with AI assistance using two phases:
 
-### Workflow architecture
-
-Nine agent definitions (`.claude/agents/*.md`) encode the scope, rules, and output requirements for each phase. The agents are invoked sequentially: each reads `SPEC.md` and `PHASE_LOG.md`, does its bounded work, appends a structured entry to `PHASE_LOG.md`, and stops. The human reviews the output at each phase boundary before proceeding.
-
-This pipeline produced working, tested, documented full-stack application code across 9 phases in a single session.
+1. **Multi-agent bootstrap (Phases 1–9).** Nine specialist agents defined in `.claude/agents/*.md`, invoked sequentially. Each read `SPEC.md` + `PHASE_LOG.md`, did bounded work, appended an entry, stopped. The human reviewed at each boundary.
+2. **Post-bootstrap iteration (Phase 10+).** A single Claude Code conversation where the design moved from "admin runs everything" to "mobile-bank-style portal + admin monitoring". JWT auth, role splits, customer self-service CRUD, auto-pay, two-channel reminders, the notifications log, the BusinessClock fix for the overdue calculation, and the admin restructure all landed during this iteration.
 
 ### What the AI was used for
 
-- Generating all backend C# code (entities, EF Core configurations, services, controllers, middleware, tests)
-- Generating all frontend JavaScript/JSX (API client, components, pages, routing, CSS)
-- Writing Mermaid diagram syntax
+- Generating C# code: entities, EF configurations, services, controllers, middleware, JWT setup, mock external services, migrations
+- Generating React code: API client (with JWT injection + 401 redirect), Auth context, role-aware routing, portal pages, admin analysis view, notifications log UI
+- Mermaid diagrams for ER + sequence flows
 - FluentValidation rule patterns
-- EF Core filtered index configuration
 - xUnit test structure and FluentAssertions syntax
-
-### Key decisions I made (not the AI)
-
-These are decisions extracted from `PHASE_LOG.md` where the approach required human judgement:
-
-- **Database choice:** Started with SQL Server LocalDB (spec), evaluated PostgreSQL for macOS compatibility, chose SQL Server on Docker for banking-domain realism, then switched from SQL Server 2022 to **Azure SQL Edge** when the standard image showed ARM64 platform warnings on Apple Silicon.
-- **`.slnx` solution format:** .NET 10 generates `.slnx` by default (new XML format). Accepted this deviation from `.sln` as the forward-looking standard.
-- **`NotFoundException` not inheriting `DomainException`:** 404 (not found) and 409 (business rule violation) are semantically distinct. Sharing a base class would require middleware type inspection and obscure intent.
-- **`PaymentStatus.Successful = 0`:** The filtered unique index uses `[Status] = 0` as a literal integer. This coupling was documented with inline comments rather than hidden.
-- **Period validated at service layer, not via DB CHECK constraint:** SQL Server LIKE-based CHECK constraints cannot enforce month range 01–12. Service-layer validation is sufficient and simpler.
-- **Commit before throw on gateway failure:** Failed payment records must be persisted for audit. The transaction commits even on decline; the `committed` flag prevents double-rollback.
-- **Fire-and-forget notifications after commit:** Holding a DB transaction open during a network call to a third-party notification service would starve the connection pool. The payment is committed first; notification failure cannot roll it back.
-
-### Things I changed or corrected in AI output
-
-- **Missing `using Microsoft.Extensions.Logging;`** in three `Infrastructure/ExternalServices/` client files — build failed, fixed immediately.
-- **`TransactionIgnoredWarning` as error in xUnit** — EF Core InMemory raises this warning as an exception by default. Tests failed; fixed by adding `.ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))` to the test helper.
-- **Port 5072 vs 5000** — `launchSettings.json` assigned port 5072, not the spec's assumed 5000. Corrected in `appsettings.json` (`ExternalServices:BaseUrl`) and Vite proxy config.
-- **`.gitignore` missing `.claude/settings.local.json`** — Claude Code session state was accidentally staged. Added the exclusion and removed from index.
-- **`zsh: event not found: Passw0rd`** — The `!` in `YourStrong!Passw0rd` triggers zsh history expansion inside double quotes. Corrected all documentation to use single quotes.
-- **ARM64 Docker platform warning** — Switched from `mcr.microsoft.com/mssql/server:2022-latest` (amd64 only) to `mcr.microsoft.com/azure-sql-edge` (ARM64 native). Environment variables also differ (`ACCEPT_EULA=1` and `MSSQL_SA_PASSWORD` instead of `ACCEPT_EULA=Y` and `SA_PASSWORD`).
-
-### What I would do differently
-
-- **Seed cleanup between test phases:** Smoke-testing each CRUD phase deleted seeded records, so later phases had to work with partial data. A per-phase seed reset strategy would have made testing cleaner.
-- **Run `dotnet test` after every phase, not just Phase 7:** Catching the `TransactionIgnoredWarning` earlier would have been less surprising.
-- **Version-pin the Vite scaffold template:** `npm create vite@latest` pulled `v9.0.7` which generated a slightly different `App.jsx` boilerplate than expected. Pinning the version in the agent definition would make the scaffold reproducible.
-- **Define `ExternalServiceException` in Phase 2:** It was created in Phase 6. Because it belongs in the Domain layer, it should have been part of the initial exception hierarchy.
 
 ---
 
 ## Known limitations and future improvements
 
-See [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md) for the full list. Key items:
+See [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md) for the full list. Highlights:
 
-- No authentication or authorisation (any caller can access any data)
-- Notification delivery is simulated (ILogger only — no real SMS/email)
-- No background scheduler for automatic monthly payment reminders
-- No idempotency keys on the payment endpoint (duplicate POST on network retry)
-- Frontend has no pagination on large lists
+- No real scheduler — `process-auto-pay` and reminders both require a triggering request. A `BackgroundService` calling the same endpoints nightly is a 30-line drop-in.
+- No idempotency keys on `POST /api/payments`.
+- Notifications are mock-only — the `INotificationClient` posts to a self-loopback controller that logs and persists rather than calling a real SMS/Email gateway.
+- No pagination on long lists in the frontend.
+- All copy and amounts are English / TRY only.

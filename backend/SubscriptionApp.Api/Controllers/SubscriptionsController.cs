@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SubscriptionApp.Api.Dtos.Subscriptions;
 using SubscriptionApp.Api.Mapping;
@@ -7,6 +8,7 @@ namespace SubscriptionApp.Api.Controllers;
 
 [ApiController]
 [Route("api/subscriptions")]
+[Authorize(Roles = "Admin")]
 public class SubscriptionsController : ControllerBase
 {
     private readonly ISubscriptionService _subscriptionService;
@@ -28,28 +30,5 @@ public class SubscriptionsController : ControllerBase
     {
         var subscription = await _subscriptionService.GetByIdAsync(id);
         return Ok(subscription.ToResponse());
-    }
-
-    [HttpPost]
-    public async Task<ActionResult<SubscriptionResponse>> Create([FromBody] CreateSubscriptionRequest request)
-    {
-        var subscription = await _subscriptionService.CreateAsync(request.ToEntity());
-        var response = subscription.ToResponse();
-        return CreatedAtAction(nameof(GetById), new { id = response.Id }, response);
-    }
-
-    [HttpPut("{id:int}")]
-    public async Task<ActionResult<SubscriptionResponse>> Update(int id, [FromBody] UpdateSubscriptionRequest request)
-    {
-        var subscription = await _subscriptionService.UpdateAsync(
-            id, request.Status, request.ProviderName, request.BillingDayOfMonth);
-        return Ok(subscription.ToResponse());
-    }
-
-    [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id)
-    {
-        await _subscriptionService.DeleteAsync(id);
-        return NoContent();
     }
 }

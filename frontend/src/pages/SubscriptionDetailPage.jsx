@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getSubscription } from '../api/subscriptions'
+import { usersApi } from '../api/users.js'
 import { getDebt } from '../api/external'
-import { createPayment } from '../api/payments'
+import { createPayment, getPayments } from '../api/payments'
+import { useAuth } from '../context/AuthContext.jsx'
 import Button from '../components/Button'
 import Modal from '../components/Modal'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -20,6 +22,8 @@ const currentPeriod = () => {
 export default function SubscriptionDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'Admin'
 
   const [sub, setSub] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -35,13 +39,32 @@ export default function SubscriptionDetailPage() {
   const [payErrors, setPayErrors] = useState({})
   const [paying, setPaying] = useState(false)
 
+  const [payments, setPayments] = useState([])
+  const [paymentsLoading, setPaymentsLoading] = useState(false)
+  const [paymentsError, setPaymentsError] = useState(null)
+
+  async function loadPayments() {
+    setPaymentsLoading(true); setPaymentsError(null)
+    try {
+      const data = isAdmin ? await getPayments(id) : await usersApi.getMySubscriptionPayments(id)
+      setPayments(Array.isArray(data) ? data : [])
+    } catch (e) {
+      setPaymentsError(e.message)
+    } finally {
+      setPaymentsLoading(false)
+    }
+  }
+
   useEffect(() => {
     setLoading(true)
-    getSubscription(id)
+    const fetcher = isAdmin ? getSubscription(id) : usersApi.getMySubscription(id)
+    fetcher
       .then(setSub)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [id])
+    loadPayments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, isAdmin])
 
   const queryDebt = async () => {
     setDebtLoading(true); setDebtError(null); setDebt(null)
@@ -69,6 +92,7 @@ export default function SubscriptionDetailPage() {
       setShowPayModal(false)
       setToast(`Payment of ${amt} TRY accepted for ${payForm.period}.`)
       setDebt(null)
+      loadPayments()
     } catch (e) {
       setPayErrors({ _: e.message })
     } finally {
@@ -82,7 +106,7 @@ export default function SubscriptionDetailPage() {
     <div className="page">
       <div className="page-header">
         <div>
-          <button className="link-btn" style={{ fontSize: 13, marginBottom: 6 }} onClick={() => navigate('/subscriptions')}>← Back to Subscriptions</button>
+          <button className="link-btn" style={{ fontSize: 13, marginBottom: 6 }} onClick={() => navigate(isAdmin ? '/subscriptions' : '/portal/subscriptions')}>← Back to Subscriptions</button>
           <h1>{sub?.providerName}</h1>
         </div>
       </div>
@@ -100,7 +124,10 @@ export default function SubscriptionDetailPage() {
                 ['Type', SUB_TYPES[sub.subscriptionType]],
                 ['Subscription Number', sub.subscriptionNumber],
                 ['Status', <span className={`badge badge-${sub.status === 0 ? 'active' : 'passive'}`}>{STATUS_LABELS[sub.status]}</span>],
-                ['Billing Day', sub.billingDayOfMonth],
+                ['Billing Day (provider)', sub.billingDayOfMonth],
+                ['Last Payment Day (provider)', sub.lastPaymentDayOfMonth],
+                ['Payment Day (customer)', sub.paymentDayOfMonth],
+                ['Auto-pay', sub.isAutoPay ? <span className="badge badge-info">On</span> : <span className="badge badge-warning">Off</span>],
                 ['Created At', new Date(sub.createdAt).toLocaleDateString()],
               ].map(([label, val]) => (
                 <tr key={label}>
@@ -117,7 +144,7 @@ export default function SubscriptionDetailPage() {
         <Button onClick={queryDebt} disabled={debtLoading} variant="secondary">
           {debtLoading ? 'Querying…' : 'Query Debt'}
         </Button>
-        {debt && <Button onClick={openPayModal}>Pay Now</Button>}
+        {debt && !isAdmin && <Button onClick={openPayModal}>Pay Now</Button>}
       </div>
 
       <ErrorBanner message={debtError} onDismiss={() => setDebtError(null)} />
@@ -126,8 +153,59 @@ export default function SubscriptionDetailPage() {
         <div className="debt-card">
           <h3>Current Debt — {debt.period}</h3>
           <div className="debt-amount">{debt.amount.toLocaleString()} {debt.currency}</div>
+          {debt.lastPaymentDate && (
+            <div className="debt-due">
+              Last payment date: <strong>{new Date(debt.lastPaymentDate).toLocaleDateString('en-GB')}</strong>
+            </div>
+          )}
         </div>
       )}
+
+      <div style={{ marginTop: 28 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>
+          Payment History
+          <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 400, color: 'var(--color-text-muted)' }}>
+            {payments.length} {payments.length === 1 ? 'record' : 'records'}
+          </span>
+        </h2>
+        <ErrorBanner message={paymentsError} onDismiss={() => setPaymentsError(null)} />
+        {paymentsLoading ? (
+          <LoadingSpinner />
+        ) : payments.length === 0 ? (
+          <div className="empty-state" style={{ padding: '24px 0' }}>
+            <p>No payments yet for this subscription.</p>
+          </div>
+        ) : (
+          <div className="card" style={{ padding: 0 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>Amount</th>
+                  <th>Date</th>
+                  <th>Status</th>
+                  <th>Transaction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((p) => (
+                  <tr key={p.id}>
+                    <td>{p.period}</td>
+                    <td>{Number(p.amount).toLocaleString()} TRY</td>
+                    <td>{new Date(p.paymentDate).toLocaleString('en-GB', { hour12: false })}</td>
+                    <td>
+                      <span className={`badge badge-${p.status === 0 ? 'success' : 'failed'}`}>
+                        {p.status === 0 ? 'Successful' : 'Failed'}
+                      </span>
+                    </td>
+                    <td className="txn-cell">{p.externalTransactionId ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {showPayModal && (
         <Modal title="Process Payment" onClose={() => setShowPayModal(false)}>

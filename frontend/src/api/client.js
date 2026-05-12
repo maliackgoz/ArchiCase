@@ -1,6 +1,11 @@
-async function apiFetch(url, options = {}) {
+export async function apiFetch(url, options = {}) {
+  const token = localStorage.getItem('auth_token')
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
     ...options,
   })
 
@@ -9,6 +14,13 @@ async function apiFetch(url, options = {}) {
   const body = await res.json().catch(() => ({}))
 
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_user')
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login')
+      }
+    }
     const err = new Error(body?.error?.message || `HTTP ${res.status}`)
     err.code = body?.error?.code
     err.details = body?.error?.details

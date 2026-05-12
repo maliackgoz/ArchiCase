@@ -8,6 +8,6 @@ public interface ISubscriptionService
     Task<List<Subscription>> GetAllAsync(int? customerId);
     Task<Subscription> GetByIdAsync(int id);
     Task<Subscription> CreateAsync(Subscription subscription);
-    Task<Subscription> UpdateAsync(int id, SubscriptionStatus status, string providerName, int billingDayOfMonth);
+    Task<Subscription> UpdateAsync(int id, SubscriptionStatus status, string providerName, int paymentDayOfMonth, bool isAutoPay);
     Task DeleteAsync(int id);
 }

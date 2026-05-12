@@ -7,7 +7,7 @@ public class CustomerDashboardResponse
 {
     public int ActiveSubscriptionCount { get; set; }
     public List<UnpaidSubscriptionSummary> UnpaidThisMonth { get; set; } = [];
-    public List<PaymentResponse> RecentPayments { get; set; } = [];
+    public List<DashboardPaymentResponse> RecentPayments { get; set; } = [];
     public decimal TotalPaidThisYear { get; set; }
 }
 

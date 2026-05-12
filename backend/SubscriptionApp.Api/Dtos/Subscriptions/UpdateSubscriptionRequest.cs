@@ -6,5 +6,6 @@ public class UpdateSubscriptionRequest
 {
     public SubscriptionStatus Status { get; set; }
     public string ProviderName { get; set; } = string.Empty;
-    public int BillingDayOfMonth { get; set; }
+    public int PaymentDayOfMonth { get; set; }
+    public bool IsAutoPay { get; set; }
 }

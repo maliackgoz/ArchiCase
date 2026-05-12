@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using SubscriptionApp.Domain.Enums;
 using SubscriptionApp.Infrastructure.ExternalServices.Models;
 using SubscriptionApp.Infrastructure.Persistence;
+using SubscriptionApp.Infrastructure.Utilities;
 
 namespace SubscriptionApp.Api.Controllers.External;
 
@@ -36,12 +36,18 @@ public class DebtInquiryController : ControllerBase
             _                            => rng.Next(50, 201)
         };
 
+        // Build the actual provider deadline for the current period.
+        var today = BusinessClock.Today();
+        var lastPaymentDate = new DateTime(today.Year, today.Month, subscription.LastPaymentDayOfMonth,
+            0, 0, 0, DateTimeKind.Unspecified);
+
         return Ok(new DebtInquiryResponse
         {
             SubscriptionId = subscriptionId,
             Amount = amount,
-            Period = DateTime.UtcNow.ToString("yyyy-MM"),
-            Currency = "TRY"
+            Period = BusinessClock.CurrentPeriod(),
+            Currency = "TRY",
+            LastPaymentDate = lastPaymentDate
         });
     }
 }

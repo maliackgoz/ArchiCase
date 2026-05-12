@@ -25,6 +25,15 @@ public class SubscriptionConfiguration : IEntityTypeConfiguration<Subscription>
         builder.Property(s => s.BillingDayOfMonth)
             .IsRequired();
 
+        builder.Property(s => s.LastPaymentDayOfMonth)
+            .IsRequired();
+
+        builder.Property(s => s.PaymentDayOfMonth)
+            .IsRequired();
+
+        builder.Property(s => s.IsAutoPay)
+            .IsRequired();
+
         builder.Property(s => s.CreatedAt)
             .IsRequired();
 

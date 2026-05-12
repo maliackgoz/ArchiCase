@@ -13,4 +13,10 @@ public class ExternalServiceException : Exception
     {
         Code = errorCode;
     }
+
+    public ExternalServiceException(string errorCode, string message, Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Code = errorCode;
+    }
 }

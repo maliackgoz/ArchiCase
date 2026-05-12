@@ -5,13 +5,6 @@ namespace SubscriptionApp.Api.Mapping;
 
 public static class CustomerMappings
 {
-    public static Customer ToEntity(this CreateCustomerRequest request) => new()
-    {
-        FullName = request.FullName,
-        Email = request.Email,
-        PhoneNumber = request.PhoneNumber
-    };
-
     public static CustomerResponse ToResponse(this Customer customer) => new()
     {
         Id = customer.Id,

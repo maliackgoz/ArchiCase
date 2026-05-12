@@ -3,6 +3,7 @@ using SubscriptionApp.Domain.Entities;
 using SubscriptionApp.Domain.Enums;
 using SubscriptionApp.Domain.Exceptions;
 using SubscriptionApp.Infrastructure.Persistence;
+using SubscriptionApp.Infrastructure.Utilities;
 
 namespace SubscriptionApp.Infrastructure.Services;
 
@@ -34,21 +35,6 @@ public class CustomerService : ICustomerService
         return customer;
     }
 
-    public async Task<Customer> CreateAsync(Customer customer)
-    {
-        var emailExists = await _db.Customers
-            .AnyAsync(c => c.Email == customer.Email);
-
-        if (emailExists)
-            throw new DomainException("DUPLICATE_EMAIL",
-                $"A customer with email '{customer.Email}' already exists.");
-
-        customer.CreatedAt = DateTime.UtcNow;
-        _db.Customers.Add(customer);
-        await _db.SaveChangesAsync();
-        return customer;
-    }
-
     public async Task DeleteAsync(int id)
     {
         var customer = await _db.Customers.FindAsync(id);
@@ -66,8 +52,9 @@ public class CustomerService : ICustomerService
         if (customer is null)
             throw new NotFoundException(nameof(Customer), customerId);
 
-        var currentPeriod = DateTime.UtcNow.ToString("yyyy-MM");
-        var yearStart = new DateTime(DateTime.UtcNow.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var today = BusinessClock.Today();
+        var currentPeriod = BusinessClock.CurrentPeriod();
+        var yearStart = new DateTime(today.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var yearEnd = yearStart.AddYears(1);
 
         var subscriptions = await _db.Subscriptions
@@ -87,8 +74,12 @@ public class CustomerService : ICustomerService
             .Select(p => p.SubscriptionId)
             .ToListAsync();
 
+        // Only flag a subscription as "unpaid this month" once the provider's billing day has arrived.
+        // Before the billing day there's nothing to pay yet, so it shouldn't appear as a debt.
         var unpaid = subscriptions
-            .Where(s => s.Status == SubscriptionStatus.Active && !paidThisMonthIds.Contains(s.Id))
+            .Where(s => s.Status == SubscriptionStatus.Active
+                        && s.BillingDayOfMonth <= today.Day
+                        && !paidThisMonthIds.Contains(s.Id))
             .Select(s => (s.Id, s.ProviderName, s.SubscriptionType))
             .ToList();
 
@@ -98,6 +89,21 @@ public class CustomerService : ICustomerService
             .Where(p => allIds.Contains(p.SubscriptionId))
             .OrderByDescending(p => p.PaymentDate)
             .Take(10)
+            .Join(_db.Subscriptions,
+                p => p.SubscriptionId,
+                s => s.Id,
+                (p, s) => new RecentPaymentRow
+                {
+                    Id = p.Id,
+                    SubscriptionId = p.SubscriptionId,
+                    ProviderName = s.ProviderName,
+                    SubscriptionType = s.SubscriptionType,
+                    Amount = p.Amount,
+                    Period = p.Period,
+                    Status = p.Status,
+                    PaymentDate = p.PaymentDate,
+                    ExternalTransactionId = p.ExternalTransactionId
+                })
             .ToListAsync();
 
         var totalPaidThisYear = await _db.Payments

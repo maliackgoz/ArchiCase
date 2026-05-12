@@ -811,3 +811,98 @@ All Mermaid diagrams use valid syntax (erDiagram, sequenceDiagram). All internal
 
 ### Open questions raised
 None. The project is complete.
+
+---
+
+## Phase 10 — Post-bootstrap iteration (portal, auto-pay, notifications log, admin restructure)
+
+**Agent:** human-driven, single Claude Code conversation
+**Date:** 2026-05-11 → 2026-05-12
+
+### What was built
+
+The 9-phase bootstrap delivered an admin-runs-everything CRUD. This phase rewrote the experience as a mobile-bank-style portal with the admin demoted to monitoring. Listing the deltas grouped by concern:
+
+**Authentication & identity**
+- New `User` domain entity with `Role` (`Admin` / `Customer`) and nullable `CustomerId` (admin has no Customer row).
+- `Infrastructure/Utilities/PasswordHasher.cs` — PBKDF2-SHA256, 350 000 iterations, BCL only.
+- `Api/Services/JwtService.cs` — HMAC-SHA256 token with `sub`, `email`, `customerId` (omitted for admin), `role` claims.
+- `AuthController` (`POST /api/auth/login`, `POST /api/auth/register`). `RegisterAsync` reuses an existing `Customer` row when an admin pre-onboarded one with the same email.
+- `JwtBearer` middleware with an `OnChallenge` handler that rewrites 401s to the project's `{ error: { code, message } }` shape.
+- Frontend `AuthContext` + role-aware `ProtectedRoute`; `apiFetch` injects JWT and auto-redirects on 401.
+
+**Customer-driven subscription model**
+- `Subscription` gained `LastPaymentDayOfMonth`, `PaymentDayOfMonth`, `IsAutoPay`.
+- `BillingDayOfMonth` + `LastPaymentDayOfMonth` are provider-owned (sourced from a new `IProviderInfoClient`); `BillingDayOfMonth` is capped at 21 so `LastPaymentDayOfMonth = billing + 7` stays in `[8, 28]`.
+- `SubscriptionService.UpdateAsync` rejects out-of-range payment days with `409 PAYMENT_DAY_OUT_OF_RANGE` carrying the exact valid bounds.
+- Customer CRUD moved under `/api/users/me/subscriptions/*` (with ownership checks). Admin `POST/PUT/DELETE /api/subscriptions` removed (405).
+- Frontend `PortalSubscriptionsPage` got Add / Edit / Delete with a live range warning on payment day, an auto-pay checkbox, and a "Run auto-pay (N)" button.
+
+**Auto-pay**
+- `IsAutoPay` flag persisted on `Subscription`.
+- `UserService.ProcessAutoPayAsync` walks Active + IsAutoPay subs for the current customer, skipping subs whose chosen payment day has not arrived or whose period is already paid, otherwise calling `IDebtInquiryClient` then `PaymentService.CreateAsync`. Returns `{ processed, succeeded, failed, skipped }`.
+- Reminder loop in `UserService.GetRemindersAsync` skips `IsAutoPay = true` subscriptions entirely.
+
+**Reminders & notifications**
+- Reminder gating switched from `PaymentDayOfMonth` → `LastPaymentDayOfMonth` (the real provider deadline).
+- Reminders now fan out on **SMS + Email** via two independent `Task.Run` calls.
+- New `Notification` entity + `NotificationConfiguration` (indexed on `SentAt`). `Migrations/AddNotifications`.
+- The mock `NotificationController` persists every call alongside its existing `ILogger.LogInformation`.
+- New `NotificationsController` (`GET /api/notifications`) is admin-only, resolves the recipient to a `Customer` (by phone for SMS, email for EMAIL) at read time, returns `customerId` + `customerName` on each row.
+- Frontend admin `NotificationsPage` with channel filter, customer-name + customer-id search, and click-through to the customer's dashboard.
+
+**Admin restructure**
+- Admin nav reduced to **Customers / Analysis / Notifications**.
+- `CustomersPage`: search by name + id, per-row actions `Dashboard / Subs / Notifs / Delete`. **Add Customer removed** — customers self-register; the admin form created records nobody could log into.
+- `SubscriptionsPage` rebuilt as a multi-filter analysis view (customer / type / status / auto-pay / provider) with live summary stats (matching / active / passive / auto-pay-on / by-type). Read-only.
+- `DashboardPage` moved to `/dashboard/:customerId` with no picker.
+- Each of Analysis, Notifications, Dashboard has a `← Back to Customers` link.
+
+**Provider-supplied details on Query Debt**
+- `DebtInquiryResponse` gained `LastPaymentDate` (computed against the current period using `BusinessClock`).
+- The blue "Current Debt" card now shows the deadline date below the amount.
+
+**Calendar correctness — `BusinessClock`**
+- Pre-fix: overdue calc near midnight used UTC; Turkey users saw `2d overdue` when wall-clock said `3d`.
+- `Infrastructure/Utilities/BusinessClock.cs` resolves "today" via `TimeZoneInfo.FindSystemTimeZoneById("Europe/Istanbul" / "Turkey Standard Time")` with a fixed UTC+3 fallback. Used by `UserService`, `CustomerService`, `DebtInquiryController`, `NotificationController`, `DbInitializer`.
+- Persisted `DateTime` values stay UTC for storage; conversion only happens at "calendar math" sites.
+
+**Demo seed rewrite**
+- `DbInitializer` rebuilt around scenarios anchored to `BusinessClock.Now().Day`:
+  - **Ahmet Yılmaz** — caught up, all auto-pay, no reminders, healthy dashboard.
+  - **Fatma Kaya** — manual payer with 1 overdue + 1 due-soon + 1 future-month reminder; one failed-then-retried payment in the recent history.
+  - **Mehmet Demir** — one "due today" manual reminder, one auto-pay sub, one Passive sub with a historical failure.
+- Six months of payment history per customer; default amounts by subscription type so totals look realistic.
+
+### Files created (selected)
+
+- Domain: `User.cs`, `Notification.cs`
+- Api: `AuthController.cs`, `UsersController.cs`, `NotificationsController.cs`, `External/ProviderInfoController.cs`, `Services/JwtService.cs`, plus `Dtos/Auth/`, `Dtos/Notifications/`, `Dtos/Users/`
+- Infrastructure: `Utilities/PasswordHasher.cs`, `Utilities/BusinessClock.cs`, `Services/AuthService.cs`, `Services/UserService.cs`, `ExternalServices/IProviderInfoClient.cs` + impl, `Persistence/Configurations/UserConfiguration.cs`, `NotificationConfiguration.cs`
+- Migrations: `AddUsers`, `MakeUserCustomerIdNullable`, `AddPaymentDayOfMonth`, `AddProviderDeadlineAndAutoPay`, `AddNotifications`
+- Frontend: `context/AuthContext.jsx`, `components/ProtectedRoute.jsx`, `pages/LandingPage.jsx`, `pages/NotificationsPage.jsx`, `pages/portal/*`, `api/auth.js`, `api/users.js`, `api/notifications.js`
+
+### Files retired
+
+- `POST /api/customers` endpoint, `CreateCustomerRequest` DTO, `CreateCustomerRequestValidator`, `CustomerMappings.ToEntity`, `ICustomerService.CreateAsync` — customer creation lives in `AuthService.RegisterAsync` only.
+- `POST/PUT/DELETE /api/subscriptions` — admin is read-only on subscriptions now.
+
+### Verification
+
+```
+dotnet build           → 0 warnings, 0 errors
+dotnet test            → Passed! 6 passed, 0 failed
+npm run build (vite)   → ✓ clean
+```
+
+Smoke tests during development verified:
+- Auth: 401 → `{ error: { code: "UNAUTHORIZED" } }`, customer hitting admin endpoints → 403, admin hitting `/api/users/me/*` → 403.
+- Sign-up reuse: admin-pre-created Customer with email X, self-register with X → customerId reused (no duplicate row).
+- Payment day range: `PUT … paymentDayOfMonth=25` against window `[7, 14]` → 409 with `Payment day must be between 7 (billing day) and 14 (last payment day)`.
+- Auto-pay: pre-charge → skipped. After updating payment day to today → succeeded. After resetting → already-paid → skipped.
+- Reminders: enabling auto-pay on a previously overdue sub immediately removes it from the reminder list.
+
+### Open questions
+
+- Should a `BackgroundService` call `process-auto-pay` nightly so the demo doesn't require a button press? Currently listed in `FUTURE_IMPROVEMENTS.md`.
+- Should failed auto-pay charges still produce a reminder on the next read? Today they don't (the auto-pay skip is unconditional). Acceptable for the case study; would be worth revisiting in production.

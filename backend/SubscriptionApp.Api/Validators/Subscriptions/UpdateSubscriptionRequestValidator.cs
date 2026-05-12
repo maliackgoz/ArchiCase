@@ -7,15 +7,15 @@ public class UpdateSubscriptionRequestValidator : AbstractValidator<UpdateSubscr
 {
     public UpdateSubscriptionRequestValidator()
     {
-        RuleFor(x => x.Status)
-            .IsInEnum();
+        RuleFor(x => x.Status).IsInEnum();
 
         RuleFor(x => x.ProviderName)
             .NotEmpty()
             .MaximumLength(100);
 
-        RuleFor(x => x.BillingDayOfMonth)
+        // Loose 1–28 sanity check; the service applies the provider's [billing, lastPayment] window.
+        RuleFor(x => x.PaymentDayOfMonth)
             .InclusiveBetween(1, 28)
-            .WithMessage("BillingDayOfMonth must be between 1 and 28.");
+            .WithMessage("PaymentDayOfMonth must be between 1 and 28.");
     }
 }

@@ -24,6 +24,9 @@ public static class SubscriptionMappings
         SubscriptionNumber = subscription.SubscriptionNumber,
         Status = subscription.Status,
         BillingDayOfMonth = subscription.BillingDayOfMonth,
+        LastPaymentDayOfMonth = subscription.LastPaymentDayOfMonth,
+        PaymentDayOfMonth = subscription.PaymentDayOfMonth,
+        IsAutoPay = subscription.IsAutoPay,
         CreatedAt = subscription.CreatedAt
     };
 }

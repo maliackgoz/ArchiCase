@@ -12,5 +12,8 @@ public class SubscriptionResponse
     public string SubscriptionNumber { get; set; } = string.Empty;
     public SubscriptionStatus Status { get; set; }
     public int BillingDayOfMonth { get; set; }
+    public int LastPaymentDayOfMonth { get; set; }
+    public int PaymentDayOfMonth { get; set; }
+    public bool IsAutoPay { get; set; }
     public DateTime CreatedAt { get; set; }
 }

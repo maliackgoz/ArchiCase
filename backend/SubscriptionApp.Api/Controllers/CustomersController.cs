@@ -1,13 +1,18 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SubscriptionApp.Api.Dtos.Customers;
+using SubscriptionApp.Api.Dtos.Payments;
 using SubscriptionApp.Api.Mapping;
-using SubscriptionApp.Domain.Enums;
 using SubscriptionApp.Infrastructure.Services;
+
+// Customer creation is owned by AuthService.RegisterAsync (the public signup flow).
+// Admins monitor + off-board only — no POST endpoint here.
 
 namespace SubscriptionApp.Api.Controllers;
 
 [ApiController]
 [Route("api/customers")]
+[Authorize(Roles = "Admin")]
 public class CustomersController : ControllerBase
 {
     private readonly ICustomerService _customerService;
@@ -29,14 +34,6 @@ public class CustomersController : ControllerBase
     {
         var customer = await _customerService.GetByIdAsync(id);
         return Ok(customer.ToResponse());
-    }
-
-    [HttpPost]
-    public async Task<ActionResult<CustomerResponse>> Create([FromBody] CreateCustomerRequest request)
-    {
-        var customer = await _customerService.CreateAsync(request.ToEntity());
-        var response = customer.ToResponse();
-        return CreatedAtAction(nameof(GetById), new { id = response.Id }, response);
     }
 
     [HttpDelete("{id:int}")]
@@ -62,7 +59,18 @@ public class CustomersController : ControllerBase
                     SubscriptionType = s.SubscriptionType
                 })
                 .ToList(),
-            RecentPayments = data.RecentPayments.Select(p => p.ToResponse()).ToList(),
+            RecentPayments = data.RecentPayments.Select(p => new DashboardPaymentResponse
+            {
+                Id = p.Id,
+                SubscriptionId = p.SubscriptionId,
+                ProviderName = p.ProviderName,
+                SubscriptionType = p.SubscriptionType,
+                Amount = p.Amount,
+                Period = p.Period,
+                Status = p.Status,
+                PaymentDate = p.PaymentDate,
+                ExternalTransactionId = p.ExternalTransactionId
+            }).ToList(),
             TotalPaidThisYear = data.TotalPaidThisYear
         };
 
